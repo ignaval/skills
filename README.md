@@ -79,8 +79,9 @@ making changes in a session, `/review-loop`.
   script validates and fails loudly (deliberate: values are interpolated into
   one docker command string). Env knobs: `CODEX_MODEL`, `CODEX_HOME`,
   `CODEX_TIMEOUT`, `CODEX_PROJECTS_ROOT`, `CODEX_EXTRA_ARGS`,
-  `CODEX_DOCKER_CMD` (set to `"sg docker -c"` if your user needs the docker
-  group activated per-command).
+  `CODEX_DOCKER_CMD` (how to execute the docker invocation; auto-detected —
+  plain docker, with an `sg docker -c` fallback when the docker group is not
+  active in the calling shell).
 - **`implementation-loop/collect-diff.sh <repo-path>`** — a comprehensive,
   binary-safe, read-only review diff for one repo: tracked changes vs HEAD plus
   full contents of new untracked files, with a loud warning when the diff is

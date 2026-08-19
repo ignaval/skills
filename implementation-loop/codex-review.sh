@@ -47,8 +47,9 @@
 #   CODEX_PROJECTS_ROOT  fallback root mount         (default: $HOME/projects)
 #   CODEX_TIMEOUT        per-call timeout in seconds (default: 3600; exit 124 on hit)
 #   CODEX_DOCKER_CMD     command that executes the docker invocation string
-#                        (default: "bash -c"; set to "sg docker -c" if your
-#                        user needs the docker group activated per-command)
+#                        (default: auto-detect — "bash -c", falling back to
+#                        "sg docker -c" when plain docker can't reach the
+#                        daemon but sg-activated docker can)
 #   CODEX_CONTAINER_USER uid:gid the container runs as (default: "$(id -u):$(id -g)").
 #                        Set to "0:0" for ROOTLESS Docker, where bind mounts
 #                        already map to your host user and a numeric uid would
@@ -124,8 +125,18 @@ fi
 
 # CODEX_DOCKER_CMD is intentionally word-split: it's an operator-supplied
 # wrapper like `bash -c` or `sg docker -c` whose last word takes the whole
-# docker invocation as one string argument.
-read -r -a DOCKER_CMD <<< "${CODEX_DOCKER_CMD:-bash -c}"
+# docker invocation as one string argument. When unset, auto-detect: if plain
+# docker can't reach the daemon but `sg docker` can (docker group present but
+# not active in this shell), route through sg.
+if [[ -n "${CODEX_DOCKER_CMD:-}" ]]; then
+  read -r -a DOCKER_CMD <<< "$CODEX_DOCKER_CMD"
+elif docker info >/dev/null 2>&1; then
+  DOCKER_CMD=(bash -c)
+elif sg docker -c "docker info" >/dev/null 2>&1; then
+  DOCKER_CMD=(sg docker -c)
+else
+  DOCKER_CMD=(bash -c)   # let `docker run` fail with the daemon's own error
+fi
 
 # The inner `bash -c '...'` keeps the quoted TOML value intact through both
 # this script's shell and the wrapper's shell. `timeout` runs INSIDE the
