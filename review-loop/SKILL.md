@@ -8,8 +8,10 @@ description: >-
   (medium effort until clean then high; per-finding rounds only while they
   surface NEW bug classes, then a parallel discipline sweep + capped
   verification), fixing valid findings as it goes, and reports every finding
-  fixed or dismissed. Use when work already exists and the user wants it
-  review-hardened. Invoke via /review-loop.
+  fixed or dismissed. Accepts an optional low|medium|high intensity profile
+  (default high) that scales rounds and tiers, never the models. Use when work
+  already exists and the user wants it review-hardened. Invoke via
+  /review-loop.
 ---
 
 # Review Loop
@@ -27,8 +29,27 @@ block on input. The user sees the final report.
 
 **Model split:** the orchestrating session judges every finding itself; fix
 subagents run on a cheaper strong model via the `Agent` tool (e.g.
-`model: "opus"`); the codex reviewer is the shared helper's default model
-(override via `CODEX_MODEL`), **`medium` effort until clean, then `high`**.
+`model: "opus"` — honor a different model if the user named one, e.g. a
+`SUBAGENT_MODEL=...` argument); the codex reviewer is the shared helper's
+default model (override via `CODEX_MODEL`), **`medium` effort until clean,
+then `high`**.
+
+## Intensity profiles (optional argument — default `high`)
+
+The user may pass a profile — `low` | `medium` | `high` — when invoking the
+skill. A profile scales the review **machinery**, never the models: a cheaper
+reviewer produces noisier findings that waste orchestrator judgment. Models
+change only through their explicit knobs (`CODEX_MODEL`, `SUBAGENT_MODEL`).
+
+| Profile | Phase-1 ladder | Phase 2 (sweep) | Phase 3 (verification) |
+|---|---|---|---|
+| `high` (default) | `medium` tier → `high` tier | yes | up to 5 rounds at `high` |
+| `medium` | `medium` tier only | yes | up to 2 rounds at `high` |
+| `low` | one `medium` round + fixes | skip | 1 round at `medium` |
+
+Everything else — your judgment on every finding, the ledger, finding
+classification, repo gates — applies at every profile. No profile given means
+`high` (exactly today's behavior).
 
 ## Shared machinery (from implementation-loop)
 
@@ -76,7 +97,8 @@ Reuse the colocated helpers — do not duplicate them:
 ## Phase 1 — Per-finding ladder (medium tier, then high tier)
 
 Loop (same structure both tiers; start `medium`, restart at `high` after the
-medium tier converges):
+medium tier converges — tiers per the intensity profile table above, which
+trims this phase at `medium`/`low`):
 
 1. Rebuild `$SCRATCH/diff-<repo>.patch` for every repo **exactly as in
    Phase 0** — committed span (`git diff BASE..HEAD`) plus uncommitted

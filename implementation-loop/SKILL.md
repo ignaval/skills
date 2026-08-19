@@ -9,9 +9,10 @@ description: >-
   ladder (medium effort until clean, then high; per-finding rounds only while
   they surface NEW bug classes, then a parallel discipline sweep + capped
   verification), and reports what changed plus every finding fixed across both
-  loops. Use when the user wants a change built with codex review gates on both
-  the plan and the code, run end-to-end with no check-ins. Invoke via
-  /implementation-loop.
+  loops. Accepts an optional low|medium|high intensity profile (default high)
+  that scales rounds and tiers, never the models. Use when the user wants a
+  change built with codex review gates on both the plan and the code, run
+  end-to-end with no check-ins. Invoke via /implementation-loop.
 ---
 
 # Implementation Loop
@@ -38,6 +39,27 @@ asks.
 Keep a `TaskCreate` list current for visibility: one task per phase, plus a
 subtask per implementation work-item. This is a long run; the list is how the
 user follows along.
+
+---
+
+## Intensity profiles (optional argument — default `high`)
+
+The user may pass a profile — `low` | `medium` | `high` — when invoking the
+skill. A profile scales the review **machinery**, never the models: a cheaper
+reviewer produces noisier findings that waste orchestrator judgment, and
+cheaper implementers buy extra review rounds. Models change only through their
+explicit knobs (`CODEX_MODEL` for the reviewer; a `SUBAGENT_MODEL` argument
+for subagents — see Phase 3).
+
+| Profile | Phase 2 | Phase-4 ladder | Sweep | Verification cap |
+|---|---|---|---|---|
+| `high` (default) | as written | `medium` tier → `high` tier | yes | 5 rounds at `high` |
+| `medium` | as written | `medium` tier only | yes | 2 rounds at `high` |
+| `low` | skip | one `medium` round + fixes | no | 1 round at `medium` |
+
+Everything else — your judgment on every finding, the ledger, finding
+classification, repo gates — applies at every profile. No profile given means
+`high` (exactly today's behavior).
 
 ---
 
@@ -149,7 +171,8 @@ well-scoped; review their output yourself before accepting it.**
   cluster). Add each as a subtask.
 - **Delegate** each well-scoped item to a subagent via the `Agent` tool with
   a strong implementation model (e.g. `model: "opus"`; `"haiku"` only for
-  trivial mechanical edits), a precise prompt
+  trivial mechanical edits — and honor a different model if the user named one,
+  e.g. a `SUBAGENT_MODEL=...` argument), a precise prompt
   (the relevant plan slice, exact files, and constraints), and
   **`run_in_background: false`** so you get the result before continuing. Keep
   genuinely architectural / cross-cutting items for yourself.
@@ -175,8 +198,9 @@ per-finding loops find new bug CLASSES early, then degrade into one-more-site
 repeats and follow-ons to your own fixes).
 
 **Tier order:** run the loop at `medium` effort until it converges, then restart
-it at `high`. Both tiers follow the same round structure and the same
-phase-transition rule below. Loop:
+it at `high` (tiers, sweep, and verification cap as the intensity profile
+specifies — the table above trims this phase at `medium`/`low`). Both tiers
+follow the same round structure and the same phase-transition rule below. Loop:
 
 1. Regenerate diffs for **every** touched repo (one file per repo). In the
    default flow work stays uncommitted, so

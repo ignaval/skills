@@ -25,6 +25,19 @@ Both skills came out of long real-world campaigns. The design lessons baked in:
   reports are advice; nothing is fixed or dismissed without the orchestrating
   model verifying it against the actual code.
 
+## Intensity profiles
+
+Both skills accept an optional `low | medium | high` profile argument
+(default `high` — exactly the behavior described above). A profile scales the
+**ceremony** — which effort tiers run, whether the discipline sweep runs, the
+verification cap — never the models. That split is deliberate: a cheaper
+reviewer model produces noisier findings that waste orchestrator judgment, and
+cheaper implementation models buy extra review rounds, so swapping models is a
+false economy. Models are overridden explicitly instead: `CODEX_MODEL` for the
+reviewer, a `SUBAGENT_MODEL` argument for implementation/fix subagents. `low`
+is the "quick pass": one medium-effort review round plus fixes and a single
+verification round.
+
 ## Prerequisites
 
 - **Claude Code** (the skills are markdown instructions for it).
