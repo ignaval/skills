@@ -76,12 +76,42 @@ Copy (or symlink) the two skill directories into your Claude Code skills dir:
 mkdir -p ~/.claude/skills && cp -r implementation-loop review-loop ~/.claude/skills/
 ```
 
-Then invoke from any Claude Code session: `/implementation-loop <task>` or, after
-making changes in a session, `/review-loop`.
-
 > The SKILL.md files reference the helper scripts at
 > `~/.claude/skills/implementation-loop/` — if you install somewhere else,
 > update those paths.
+
+## Usage
+
+Invoke from any Claude Code session. Arguments are free-form prose — the model
+reads them, so plain English works alongside the named knobs:
+
+```text
+# Build a change end-to-end, full ceremony (default profile: high)
+/implementation-loop add rate limiting to the webhook endpoints, config-driven
+
+# Same, mid-cost: medium-effort ladder only, 2 verification rounds
+/implementation-loop medium add a CSV export to the reports page
+
+# Harden work you already did in this session (uncommitted or committed)
+/review-loop
+
+# Quick pass over the session's changes: one review round + fixes
+/review-loop low
+
+# Override the implementation/fix subagent model for this run
+/implementation-loop SUBAGENT_MODEL=haiku rename the config keys across both repos
+```
+
+The reviewer model is set per-shell instead (`CODEX_MODEL=<id>`), since the
+helper script reads it directly.
+
+**What a run looks like:** both skills run fully autonomously — no approval
+gates — and narrate progress as they go. They end with a single report: what
+changed per repo, rounds per tier, every finding fixed, and every finding
+dismissed with its reason. Changes are left **uncommitted** unless you asked
+for commits (`review-loop` matches whatever commit style the session already
+used). Full per-round codex transcripts land in a scratch directory the report
+points at.
 
 ## Helper scripts
 
