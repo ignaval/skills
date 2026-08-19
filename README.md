@@ -1,4 +1,4 @@
-# claude-skills
+# skills
 
 Two [Claude Code](https://claude.com/claude-code) skills that pair Claude (as
 orchestrator, implementer, and judge) with OpenAI's `codex` CLI (as an
