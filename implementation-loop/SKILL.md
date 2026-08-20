@@ -59,39 +59,35 @@ for subagents — see Phase 3).
 
 Everything else — your judgment on every finding, the ledger, finding
 classification, repo gates — applies at every profile. No profile given means
-`high` (exactly today's behavior).
+`high` (exactly today's behavior). "Sweep: yes" is skippable in one case only:
+the ladder converged fully clean without the phase-transition rule ever firing,
+so there are no finding classes to generalize (Phase 4 states this too).
 
 ---
 
 ## Codex review helpers (read once)
 
-Codex reviews run **inside a Docker sandbox**: the container IS the sandbox —
-every repo is mounted **read-only**, and codex's own sandbox is disabled inside
-it. Two colocated helpers wrap it — always go through them (see this repo's
-README for the image build and prerequisites):
+Codex reviews run **on the host under codex's own read-only sandbox**
+(`codex exec -s read-only`): the reviewer reads the repos straight from disk
+and cannot write anything. Two colocated helpers wrap it — always go through
+them (see this repo's README for prerequisites):
 
 - **`~/.claude/skills/implementation-loop/codex-review.sh <prompt-file> [effort] [repo ...]`**
   Runs one codex pass. `effort` = `high | medium | low` (default `high`).
-  **Pass every repo in play** — each is mounted **read-only** at
-  `/work/projects/<basename>`, and this works for repos **anywhere on disk**, not
-  just under one root (paths must be free of spaces and shell metacharacters —
-  the script validates and fails loudly). The prompt file's directory is mounted at `/work/input`.
+  **Pass every repo in play** — repos anywhere on disk work; the first one
+  becomes codex's working directory. Reference repos, diffs and the plan by
+  **absolute path** in the prompt.
   Codex's answer streams to stdout; **you decide convergence by reading codex's
   final answer for the sentinel `NO ISSUES FOUND`** (see *Parsing & judgment
   notes* — the raw transcript also echoes the prompt and appends token counts, so
-  never grep it naively). Repo **basenames must be unique** per call (collisions
-  are rejected loudly). Each call is bounded by `CODEX_TIMEOUT` (default 3600s,
-  exit 124 on hit). (If you pass no repos, it falls back to mounting
-  `$HOME/projects` — override via `CODEX_PROJECTS_ROOT` — but the skill always
-  passes repos explicitly.)
+  never grep it naively). Each call is bounded by `CODEX_TIMEOUT` (default
+  3600s, exit 124 on hit).
 - **`~/.claude/skills/implementation-loop/collect-diff.sh <repo-path>`**
   Prints a comprehensive, binary-safe review diff for one repo (tracked changes
   vs HEAD + new untracked files). Never mutates the repo. Works on any repo path.
 
-Assumes: the `codex-review:latest` image is built (Dockerfile in this repo),
-docker is runnable (wrap it via `CODEX_DOCKER_CMD` if your setup needs e.g.
-`sg docker -c`), and codex auth lives in `$HOME/.codex`. Project location is
-**not** assumed — repos are mounted per basename.
+Assumes: the `codex` CLI is installed and logged in on the host. No Docker, no
+image, no mounts.
 
 Each high-effort round costs roughly 200–450k codex tokens; medium is markedly
 cheaper. **Model split (defaults, validated on a long production campaign):**
@@ -107,12 +103,15 @@ cheap findings before the expensive rounds start.
 
 1. Create a scratch dir and remember it:
    `SCRATCH="$(mktemp -d -t iloop-XXXXXX)"` — everything (plan, diffs, prompts,
-   per-round codex outputs) lives here. It's mounted into codex at `/work/input`.
+   per-round codex outputs) lives here; reference its files by absolute path
+   in every codex prompt.
 2. Identify **every repo** the task touches (the user may name several; infer the
    rest). Record their absolute paths — **anywhere on disk** — in a shell array,
-   e.g. `REPOS=(/path/to/repo-a /path/to/repo-b)`. Pass `"${REPOS[@]}"` to
-   every `codex-review.sh` call (each mounts read-only at `/work/projects/<basename>`)
-   and run `collect-diff.sh` once per repo. Every later phase — implement, diff,
+   e.g. `REPOS=(/path/to/repo-a /path/to/repo-b)`. Give each repo a unique
+   **slug** — its basename, suffixed if two repos share one — and use that slug
+   in every `$SCRATCH` filename (`baseline-<slug>.patch`, `diff-<slug>.patch`)
+   and prompt reference. Pass `"${REPOS[@]}"` to
+   every `codex-review.sh` call and run `collect-diff.sh` once per repo. Every later phase — implement, diff,
    review, report — must cover **all** of them.
 3. **Capture a baseline per repo** so pre-existing work is never confused with
    this run's work: `collect-diff.sh <repo> > "$SCRATCH/baseline-<repo>.patch"`
@@ -202,7 +201,8 @@ it at `high` (tiers, sweep, and verification cap as the intensity profile
 specifies — the table above trims this phase at `medium`/`low`). Both tiers
 follow the same round structure and the same phase-transition rule below. Loop:
 
-1. Regenerate diffs for **every** touched repo (one file per repo). In the
+1. Regenerate diffs for **every** touched repo (one file per repo, named by
+   the Phase-0 slug). In the
    default flow work stays uncommitted, so
    `collect-diff.sh <repo> > "$SCRATCH/diff-<repo>.patch"` captures it all.
    If the user asked for commits along the way, that alone would drop the
@@ -211,7 +211,8 @@ follow the same round structure and the same phase-transition rule below. Loop:
    base for a repo that had no commits) concatenated with the
    `collect-diff.sh` output.
 2. Write `$SCRATCH/impl-review-prompt.md` using the **Impl-review template** below
-   (reference each `/work/input/diff-<repo>.patch`, include the dismissed ledger).
+   (reference each `$SCRATCH/diff-<repo>.patch` by absolute path, include the
+   dismissed ledger).
 3. Run: `set -o pipefail; codex-review.sh "$SCRATCH/impl-review-prompt.md" <medium|high> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/impl-review-round-N.md"`
    (the effort argument is the current tier's; without `pipefail`, `tee` would
    mask a codex hard failure as exit 0).
@@ -253,7 +254,8 @@ place. Sweep:
   — audit agents can present unverified or fabricated corroboration; nothing is
   fixed on an auditor's say-so. Fix the survivors in one pass; declined findings
   go in the ledger as **accepted residuals** with rationale.
-- Then run **capped verification rounds** (`high`, max 5): first clean round ends
+- Then run **capped verification rounds** (effort and cap per the intensity
+  profile — 5 at `high` for the default profile): first clean round ends
   Phase 4. If findings survive, they are judged/fixed as usual and the cap ticks
   down.
 
@@ -307,19 +309,19 @@ You are a rigorous staff engineer reviewing an implementation PLAN (not code yet
 GOAL / TASK:
 <one-paragraph statement of what is being built>
 
-REPOS INVOLVED (mounted read-only — inspect them to sanity-check feasibility):
-- /work/projects/<repo-a>
-- /work/projects/<repo-b>
+REPOS INVOLVED (read them from disk to sanity-check feasibility):
+- /absolute/path/to/repo-a
+- /absolute/path/to/repo-b
 
 THE PLAN under review:
-<paste the full contents of plan.md here, or say "see /work/input/plan.md">
+<paste the full contents of plan.md here, or say "see <absolute $SCRATCH path>/plan.md">
 
 Find everything that would make this plan fail, ship incomplete, or cause a
 correctness/security/data-integrity problem: wrong or missing files & APIs,
 invalid assumptions about how the current code works, missing steps, bad ordering
 or dependency mistakes, unhandled edge cases and failure modes, migration/backfill
-gaps, and cross-repo contract mismatches. Verify claims against the actual code in
-the mounts. Prefer a few real blockers over a pile of nitpicks.
+gaps, and cross-repo contract mismatches. Verify claims against the actual code
+on disk. Prefer a few real blockers over a pile of nitpicks.
 
 PREVIOUSLY REVIEWED — intentionally NOT changed, do NOT re-raise:
 <dismissed ledger, or "none yet">
@@ -338,17 +340,19 @@ GOAL / TASK:
 <one-paragraph statement of what was built>
 
 THE PLAN it should satisfy:
-<paste plan.md, or "see /work/input/plan.md">
+<paste plan.md, or "see <absolute $SCRATCH path>/plan.md">
+
+REPOS INVOLVED (full source on disk, for context):
+- /absolute/path/to/repo-a
+- /absolute/path/to/repo-b
 
 THE DIFF under review (full working-tree change per repo):
-- /work/input/diff-<repo-a>.patch
-- /work/input/diff-<repo-b>.patch
-Full source for context is mounted read-only at /work/projects/<repo>. If you run
-any git command there, FIRST run: git config --global --add safe.directory '*'
+- <absolute $SCRATCH path>/diff-<repo-a>.patch
+- <absolute $SCRATCH path>/diff-<repo-b>.patch
 
-<if any Phase-0 baseline was non-empty, add:>
+<if any Phase-0 baseline showed changes, add:>
 OUT OF SCOPE — these files/hunks were already modified before this task started
-(see /work/input/baseline-<repo>.patch); review only the changes beyond them:
+(see <absolute $SCRATCH path>/baseline-<repo>.patch); review only the changes beyond them:
 <summarize the pre-existing changes>
 
 

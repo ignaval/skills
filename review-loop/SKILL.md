@@ -49,16 +49,20 @@ change only through their explicit knobs (`CODEX_MODEL`, `SUBAGENT_MODEL`).
 
 Everything else — your judgment on every finding, the ledger, finding
 classification, repo gates — applies at every profile. No profile given means
-`high` (exactly today's behavior).
+`high` (exactly today's behavior). "Sweep: yes" is skippable in one case only:
+the ladder converged fully clean without the phase-transition rule ever
+firing, so there are no finding classes to generalize.
 
 ## Shared machinery (from implementation-loop)
 
 Reuse the colocated helpers — do not duplicate them:
 
 - **`~/.claude/skills/implementation-loop/codex-review.sh <prompt-file> [effort] [repo ...]`**
-  — one codex pass; every repo in play is mounted read-only at
-  `/work/projects/<basename>`; the prompt file's directory mounts at
-  `/work/input`. Convergence is decided by **reading codex's final answer** for
+  — one codex pass on the host under codex's own read-only sandbox
+  (`-s read-only`): the reviewer reads repos straight from disk and cannot
+  write. Pass every repo in play (the first becomes codex's working
+  directory) and reference repos and diff files by **absolute path** in the
+  prompt. Convergence is decided by **reading codex's final answer** for
   the bare sentinel `NO ISSUES FOUND` (the transcript echoes the prompt and
   appends token counts — never grep naively; when ambiguous, assume NOT
   converged). Non-zero exit (auth/network/timeout) is a failed round, not a
@@ -71,7 +75,9 @@ Reuse the colocated helpers — do not duplicate them:
 1. `SCRATCH="$(mktemp -d -t rloop-XXXXXX)"` — prompts, diffs, per-round outputs.
 2. Identify **every repo touched in this conversation** (you were there — use
    the conversation, not guesswork). Record absolute paths in `REPOS=(...)`.
-3. Build **one review patch per repo** covering exactly this session's work:
+3. Build **one review patch per repo** covering exactly this session's work
+   (name each patch by the repo's basename, adding a suffix if two repos share
+   one):
    - **Uncommitted work:** `collect-diff.sh <repo>` captures it.
    - **Committed this session:** determine `BASE` = the last commit that was
      HEAD **before this conversation's first commit** (you know your own
@@ -149,7 +155,8 @@ classes; now close them wholesale.
 
 ## Phase 3 — Capped verification
 
-Up to **5 rounds** at `high`, with the full ledger (dismissals + accepted
+Capped rounds — effort and cap per the intensity profile (up to **5** at
+`high` for the default profile) — with the full ledger (dismissals + accepted
 residuals, marked "do NOT re-report") in the prompt. First clean round ends the
 loop. Findings that survive the ledger are judged/fixed as usual and the cap
 ticks down; if the cap expires with findings still arriving, stop and report
@@ -172,11 +179,11 @@ GOAL / CONTEXT — what these changes are for:
 <the Phase-0 GOAL paragraph>
 
 THE DIFF under review (this session's changes only):
-- /work/input/diff-<repo-a>.patch
-- /work/input/diff-<repo-b>.patch
-Full source for context is mounted read-only at /work/projects/<repo>. If you
-run any git command there, FIRST run:
-git config --global --add safe.directory '*'
+- <absolute $SCRATCH path>/diff-<repo-a>.patch
+- <absolute $SCRATCH path>/diff-<repo-b>.patch
+Full source for context is on disk:
+- /absolute/path/to/repo-a
+- /absolute/path/to/repo-b
 
 <if pre-existing dirty state exists:>
 OUT OF SCOPE — modified before this session; review only changes beyond them:

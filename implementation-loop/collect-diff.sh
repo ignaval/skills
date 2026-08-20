@@ -33,6 +33,11 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
   exit 2
 fi
 
+# Operate from the worktree root: `git ls-files --others` is scoped to the
+# cwd, so running from a subdirectory would silently omit untracked files
+# elsewhere in the repo.
+cd "$(git rev-parse --show-toplevel)"
+
 # symbolic-ref (not rev-parse --abbrev-ref): on an unborn HEAD the latter
 # prints "HEAD" on stdout AND fails, so the fallback would append a 2nd line.
 branch="$(git symbolic-ref --short -q HEAD || echo '(detached)')"
