@@ -24,6 +24,11 @@ Both skills came out of long real-world campaigns. The design lessons baked in:
 - **The orchestrator is the arbiter.** Codex findings and audit-subagent
   reports are advice; nothing is fixed or dismissed without the orchestrating
   model verifying it against the actual code.
+- **The orchestrator reads answers, not transcripts.** A codex round's session
+  stream is easily 2 MB (every shell call echoed) while its verdict is 3 KB.
+  The helper writes the final answer to its own file as schema-checked JSON
+  (`{"findings": [...]}`, empty = clean), so convergence is a mechanical check
+  and no round costs the orchestrator a megabyte of context.
 
 ## Intensity profiles
 
@@ -110,10 +115,15 @@ points at.
 ## Helper scripts
 
 - **`implementation-loop/codex-review.sh <prompt-file> [effort] [repo ...]`** —
-  one codex review pass under codex's read-only sandbox. Repos are referenced
-  by absolute path (the first becomes codex's working directory); the prompt
-  is piped in on stdin. The sandbox mode is hardcoded to `read-only` — an
-  autonomous reviewer must never write. Env knobs: `CODEX_MODEL`,
+  one codex review pass under codex's read-only sandbox. The first repo
+  becomes codex's working directory (`-C`), the rest are granted with
+  `--add-dir`; the prompt is piped in on stdin. The session stream goes to
+  stdout; the **final answer** goes to `$CODEX_ANSWER_FILE` (default
+  `<prompt-file>.answer.json`) as JSON validated against
+  `implementation-loop/findings.schema.json`. (`CODEX_OUTPUT_SCHEMA` swaps
+  the schema, `none` gives free text — for direct helper use only; the
+  skills assume the bundled schema.) The sandbox mode is hardcoded to `read-only` —
+  an autonomous reviewer must never write. Other knobs: `CODEX_MODEL`,
   `CODEX_TIMEOUT`, `CODEX_EXTRA_ARGS`.
 - **`implementation-loop/collect-diff.sh <repo-path>`** — a comprehensive,
   binary-safe, read-only review diff for one repo: tracked changes vs HEAD plus

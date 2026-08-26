@@ -1,307 +1,226 @@
 ---
 name: implementation-loop
 description: >-
-  Autonomous plan → codex-review → implement → codex-review → report loop for
-  non-trivial changes, especially ones spanning multiple repos. Drafts a plan,
-  runs a single codex sanity pass over it (contract-heavy work only),
-  implements it by delegating to cheaper-model subagents while reviewing their
-  work, then hardens the implementation through a CONVERGENCE-MANAGED codex
-  ladder (medium effort until clean, then high; per-finding rounds only while
-  they surface NEW bug classes, then a parallel discipline sweep + capped
-  verification), and reports what changed plus every finding fixed across both
-  loops. Accepts an optional low|medium|high intensity profile (default high)
-  that scales rounds and tiers, never the models. Use when the user wants a
-  change built with codex review gates on both the plan and the code, run
-  end-to-end with no check-ins. Invoke via /implementation-loop.
+  Autonomous build loop for non-trivial (often multi-repo) changes: plan →
+  single codex sanity pass on the plan → implement via reviewed subagents →
+  convergence-managed codex review ladder over the diff → report. Optional
+  low|medium|high intensity profile (default high). Invoke via
+  /implementation-loop.
 ---
 
 # Implementation Loop
 
 Build a non-trivial change end-to-end: **plan it, have codex sanity-check the
 plan, implement it (leaning on cheaper models but reviewing everything), have
-codex tear the implementation apart until it's clean, then report.** Runs
-**fully autonomously** — see the mandate below.
+codex tear the implementation apart until it's clean, then report.**
 
-The task to build is whatever the user described (this skill's arguments and/or
-the preceding conversation). If the task is truly ambiguous about *what* to
-build, make the most reasonable interpretation, state it in the plan, and
-proceed — do not stop to ask.
+The task is whatever the user described (arguments and/or the preceding
+conversation). If it is ambiguous about *what* to build, pick the most
+reasonable interpretation, state it in the plan, and proceed.
 
 ## Autonomous mandate
 
-**Do not pause for the user between or within phases.** No approval gates, no
-"should I proceed?", no mid-run questions. Make every decision yourself using the
-codebase, the plan, and sensible defaults. The user sees the **final report**
-only. Narrate progress and keep the task list current, but never block on input.
-Even the plan sanity pass (Phase 2) *proceeds* on your own judgment — it never
-asks.
+**Never pause for the user.** No approval gates, no "should I proceed?", no
+mid-run questions — including in the plan sanity pass. Decide everything from
+the codebase, the plan, and sensible defaults. Keep a `TaskCreate` list current
+(one task per phase, one subtask per implementation work-item) so the user can
+follow along; they see the **final report** only.
 
-Keep a `TaskCreate` list current for visibility: one task per phase, plus a
-subtask per implementation work-item. This is a long run; the list is how the
-user follows along.
+## Roles and models
 
----
+- **You** orchestrate and are the **arbiter**: every codex finding and every
+  audit-subagent report is advice. Nothing is fixed or dismissed without you
+  verifying it against the actual code, and every non-fix gets a written
+  reason in the ledger. Silently ignoring a finding is not allowed.
+- **Implementation / fix / audit subagents** run via the `Agent` tool on a
+  strong cheaper model (`model: "opus"`; `"haiku"` only for trivial mechanical
+  edits). Honor a user-supplied `SUBAGENT_MODEL=...` argument.
+- **The codex reviewer** uses the helper's default model (`CODEX_MODEL` to
+  override), at **`medium` effort until clean, then `high`** — the medium
+  tier clears the cheap findings before the expensive rounds. A high round
+  costs roughly 200–450k codex tokens.
 
 ## Intensity profiles (optional argument — default `high`)
 
-The user may pass a profile — `low` | `medium` | `high` — when invoking the
-skill. A profile scales the review **machinery**, never the models: a cheaper
-reviewer produces noisier findings that waste orchestrator judgment, and
-cheaper implementers buy extra review rounds. Models change only through their
-explicit knobs (`CODEX_MODEL` for the reviewer; a `SUBAGENT_MODEL` argument
-for subagents — see Phase 3).
+A profile scales the review **machinery**, never the models (a cheaper
+reviewer produces noisier findings that waste orchestrator judgment; cheaper
+implementers buy extra review rounds).
 
 | Profile | Phase 2 | Phase-4 ladder | Sweep | Verification cap |
 |---|---|---|---|---|
-| `high` (default) | as written | `medium` tier → `high` tier | yes | 5 rounds at `high` |
-| `medium` | as written | `medium` tier only | yes | 2 rounds at `high` |
+| `high` (default) | as written | `medium` tier → `high` tier | yes* | 5 rounds at `high` |
+| `medium` | as written | `medium` tier only | yes* | 2 rounds at `high` |
 | `low` | skip | one `medium` round + fixes | no | 1 round at `medium` |
 
-Everything else — your judgment on every finding, the ledger, finding
-classification, repo gates — applies at every profile. No profile given means
-`high` (exactly today's behavior). "Sweep: yes" is skippable in one case only:
-the ladder converged fully clean without the phase-transition rule ever firing,
-so there are no finding classes to generalize (Phase 4 states this too).
+\* Skippable only when the ladder converged fully clean without the
+phase-transition rule ever firing — then there are no finding classes to
+generalize.
 
----
+Judgment, ledger, finding classification and repo gates apply at every profile.
 
-## Codex review helpers (read once)
+## Codex review helpers
 
-Codex reviews run **on the host under codex's own read-only sandbox**
-(`codex exec -s read-only`): the reviewer reads the repos straight from disk
-and cannot write anything. Two colocated helpers wrap it — always go through
-them (see this repo's README for prerequisites):
+Codex runs **on the host under its own read-only sandbox** (`codex exec -s
+read-only`): it reads repos straight from disk and cannot write. Always go
+through the two colocated helpers (prerequisites in the repo README):
 
 - **`~/.claude/skills/implementation-loop/codex-review.sh <prompt-file> [effort] [repo ...]`**
-  Runs one codex pass. `effort` = `high | medium | low` (default `high`).
-  **Pass every repo in play** — repos anywhere on disk work; the first one
-  becomes codex's working directory. Reference repos, diffs and the plan by
-  **absolute path** in the prompt.
-  Codex's answer streams to stdout; **you decide convergence by reading codex's
-  final answer for the sentinel `NO ISSUES FOUND`** (see *Parsing & judgment
-  notes* — the raw transcript also echoes the prompt and appends token counts, so
-  never grep it naively). Each call is bounded by `CODEX_TIMEOUT` (default
-  3600s, exit 124 on hit).
+  One codex pass. `effort` = `high | medium | low`. **Pass every repo in
+  play** (the first becomes codex's cwd, the rest are `--add-dir`ed) and
+  reference repos, diffs and the plan by **absolute path** in the prompt.
+  Two outputs:
+  - **stdout** — the full session stream (shell calls, an echo of your prompt,
+    token counts). `tee` it to disk for humans. **Never parse it.**
+  - **`$CODEX_ANSWER_FILE`** — codex's **final answer only**, as JSON matching
+    `findings.schema.json`: `{"findings":[{severity,location,problem,fix}...]}`.
+    **An empty `findings` array is the convergence signal.** Read only this
+    file to judge a round; set a per-round path so rounds don't overwrite.
+  Non-zero exit (auth, network, timeout = 124) means **no review happened**:
+  retry once, then stop the loop and report the error state. Never count a
+  failed round as converged.
 - **`~/.claude/skills/implementation-loop/collect-diff.sh <repo-path>`**
-  Prints a comprehensive, binary-safe review diff for one repo (tracked changes
-  vs HEAD + new untracked files). Never mutates the repo. Works on any repo path.
-
-Assumes: the `codex` CLI is installed and logged in on the host. No Docker, no
-image, no mounts.
-
-Each high-effort round costs roughly 200–450k codex tokens; medium is markedly
-cheaper. **Model split (defaults, validated on a long production campaign):**
-the main session orchestrates and judges everything; implementation subagents
-run on a cheaper strong model via the `Agent` tool (e.g. `model: "opus"`); the
-codex reviewer is the script's default model (override via `CODEX_MODEL`), run
-**`medium`-effort until clean, then `high`** — the medium ladder clears the
-cheap findings before the expensive rounds start.
-
----
+  Comprehensive, binary-safe, read-only review diff for one repo (tracked
+  changes vs HEAD + new untracked files). Warns on stderr when too large for
+  one round.
 
 ## Phase 0 — Setup
 
-1. Create a scratch dir and remember it:
-   `SCRATCH="$(mktemp -d -t iloop-XXXXXX)"` — everything (plan, diffs, prompts,
-   per-round codex outputs) lives here; reference its files by absolute path
-   in every codex prompt.
-2. Identify **every repo** the task touches (the user may name several; infer the
-   rest). Record their absolute paths — **anywhere on disk** — in a shell array,
-   e.g. `REPOS=(/path/to/repo-a /path/to/repo-b)`. Give each repo a unique
-   **slug** — its basename, suffixed if two repos share one — and use that slug
-   in every `$SCRATCH` filename (`baseline-<slug>.patch`, `diff-<slug>.patch`)
-   and prompt reference. Pass `"${REPOS[@]}"` to
-   every `codex-review.sh` call and run `collect-diff.sh` once per repo. Every later phase — implement, diff,
-   review, report — must cover **all** of them.
-3. **Capture a baseline per repo** so pre-existing work is never confused with
-   this run's work: `collect-diff.sh <repo> > "$SCRATCH/baseline-<repo>.patch"`
-   and record each repo's `git rev-parse HEAD` (or note "no commits yet" for a
-   repo with an unborn HEAD). If a baseline shows changes — its `git status
-   --short` section is non-empty (the file always contains headers, so don't
-   test for emptiness) — the repo was already dirty: tell codex in every
-   impl-review prompt that those pre-existing changes are **out of scope**, and
-   keep them out of the final report's "what was built".
-4. Note each repo's own quality gates (tests / lint / typecheck) from its
-   `CLAUDE.md` / `AGENTS.md` / `README` / `Makefile` / `pyproject.toml` /
-   `package.json`. You'll run these in Phase 3.
-5. Seed the task list (Phases 1–5).
-
----
+1. `SCRATCH="$(mktemp -d -t iloop-XXXXXX)"` — plan, diffs, prompts, ledger,
+   per-round outputs all live here; reference them by absolute path.
+2. Identify **every repo** the task touches (named or inferred), record
+   absolute paths in `REPOS=(...)`, and give each a unique **slug** (basename,
+   suffixed on collision) used in every `$SCRATCH` filename. Every later phase
+   must cover all of them.
+3. **Baseline per repo:** `collect-diff.sh <repo> > "$SCRATCH/baseline-<slug>.patch"`
+   and record `git rev-parse HEAD` (or "no commits yet"). If a baseline's
+   `git status --short` section is non-empty (the file always has headers —
+   don't test emptiness) the repo was already dirty: mark those changes **out
+   of scope** in every impl-review prompt and keep them out of the report.
+4. Note each repo's quality gates (tests / lint / typecheck) from `CLAUDE.md` /
+   `AGENTS.md` / `README` / `Makefile` / `pyproject.toml` / `package.json`.
+5. Start `$SCRATCH/ledger.md` (empty, or seeded with design decisions already
+   made in the conversation). Seed the task list (Phases 1–5).
 
 ## Phase 1 — Plan
 
-Produce a concrete implementation plan and write it to `$SCRATCH/plan.md`.
-Investigate the actual code first — read the real files, don't plan against
-assumptions. A good plan states:
+Write `$SCRATCH/plan.md` after reading the real code. It states: goal and
+interpretation (what "done" means); affected repos and files; ordered concrete
+steps naming the functions/endpoints/migrations; data and migration changes
+(backfills, reversibility); edge cases, failure modes, security and
+data-integrity considerations; verification per part; cross-repo contracts and
+their consumers. Write for a reviewer who can read the repos but wasn't in this
+conversation.
 
-- **Goal & interpretation** — what "done" means, in one short paragraph.
-- **Affected repos** and, per repo, the specific files/modules to change.
-- **Ordered steps**, each concrete enough to hand to another engineer, with the
-  key functions/endpoints/migrations named.
-- **Data & migrations** — schema changes, backfills, reversibility.
-- **Edge cases, failure modes, security/data-integrity considerations.**
-- **Verification** — how each part will be tested/exercised.
-- **Cross-repo contracts** — API/interface changes and who consumes them.
+## Phase 2 — Plan sanity pass (codex · exactly one round)
 
-Write for a reviewer who can read the repos but wasn't in this conversation.
+A plan-review *loop* is deliberately absent: it costs as much per round as the
+impl ladder and mostly catches prose. The one class with outsized ROI is wrong
+assumptions about external contracts, money sequencing, migrations, or
+cross-repo interfaces — rework once code exists.
 
----
+- **UI-only / no-contract work:** skip.
+- **Money-path / schema / cross-repo-contract work:** one `medium` round with
+  the plan-review template. Judge the findings, fix the plan or ledger them,
+  **proceed — no re-review**.
 
-## Phase 2 — Plan sanity pass (codex · single round, not a loop)
+## Phase 3 — Implement
 
-A plan-review LOOP is deliberately absent: in practice its per-round cost
-matches the impl ladder's while catching mostly prose-level issues — the impl
-ladder catches the rest at the same price. What remains is the one class with
-outsized ROI: wrong assumptions about an external contract, money sequencing,
-migrations, or a cross-repo interface, which cost real rework once code exists.
+Execute `plan.md` across all repos.
 
-- **UI-only / no-contract work:** skip Phase 2 entirely.
-- **Money-path / schema / cross-repo-contract work:** run **exactly one**
-  `medium` codex round over the plan (plan-review template below). Judge the
-  findings, fix the plan or ledger them, and **proceed — no re-review**. The
-  impl ladder is the safety net for anything a single pass misses.
-
-## Phase 3 — Implement (cheaper models, always reviewed)
-
-Execute `plan.md` across all repos. **Delegate to cheaper models where the work is
-well-scoped; review their output yourself before accepting it.**
-
-- **Decompose** the plan into work-items (roughly one per ordered step / file
-  cluster). Add each as a subtask.
-- **Delegate** each well-scoped item to a subagent via the `Agent` tool with
-  a strong implementation model (e.g. `model: "opus"`; `"haiku"` only for
-  trivial mechanical edits — and honor a different model if the user named one,
-  e.g. a `SUBAGENT_MODEL=...` argument), a precise prompt
-  (the relevant plan slice, exact files, and constraints), and
-  **`run_in_background: false`** so you get the result before continuing. Keep
-  genuinely architectural / cross-cutting items for yourself.
-- **Review every subagent's work** before marking the subtask done: read the diff,
-  check it against the plan and for correctness, style-match the surrounding code.
-  If it's wrong or incomplete, fix it yourself or re-delegate with specific
-  feedback. **Nothing is "done" on a subagent's say-so.**
-- **Concurrency:** this session edits files in place (no worktree isolation), so
-  concurrent subagents on the **same files collide**. Default to **sequential**
-  within a repo; only parallelize items on **disjoint files / disjoint repos**.
-- **Run each repo's own gates** (tests / lint / typecheck from Phase 0) and get
-  them green before Phase 4. Codex is a reviewer, not a substitute for the repo's
-  tests. Fix what they surface.
-
----
+- **Decompose** into work-items (roughly one per step / file cluster), one
+  subtask each.
+- **Delegate** well-scoped items to subagents with a precise prompt (plan
+  slice, exact files, constraints) and `run_in_background: false`. Keep
+  architectural / cross-cutting items yourself.
+- **Review every subagent diff** against the plan and the surrounding code
+  before marking it done; fix or re-delegate with specific feedback. Nothing
+  is done on a subagent's say-so.
+- **Concurrency:** files are edited in place, so subagents on the same files
+  collide. Sequential within a repo; parallel only on disjoint files/repos.
+- **Gates green** per repo before Phase 4. Codex reviews correctness; it is
+  not a substitute for the repo's tests.
 
 ## Phase 4 — Implementation review loop (codex · convergence-managed)
 
-Harden the actual diff against codex. **Two effort tiers, and a phase-transition
-rule that stops the per-finding ladder as soon as it stops teaching** (learned
-the hard way on a long campaign where an unmanaged ladder ran 76 rounds:
-per-finding loops find new bug CLASSES early, then degrade into one-more-site
-repeats and follow-ons to your own fixes).
+An unmanaged per-finding ladder once ran 76 rounds: it finds new bug
+**classes** early, then degrades into one-more-site repeats and follow-ons to
+its own fixes. So: two effort tiers, a transition rule that stops the ladder
+when it stops teaching, a sweep that closes classes wholesale, and capped
+verification that proves closure.
 
-**Tier order:** run the loop at `medium` effort until it converges, then restart
-it at `high` (tiers, sweep, and verification cap as the intensity profile
-specifies — the table above trims this phase at `medium`/`low`). Both tiers
-follow the same round structure and the same phase-transition rule below. Loop:
+**Tier order:** `medium` until converged, then restart at `high` (trimmed by
+the profile table). Each round, either tier:
 
-1. Regenerate diffs for **every** touched repo (one file per repo, named by
-   the Phase-0 slug). In the
-   default flow work stays uncommitted, so
-   `collect-diff.sh <repo> > "$SCRATCH/diff-<repo>.patch"` captures it all.
-   If the user asked for commits along the way, that alone would drop the
-   committed work: build the patch as the committed span since the Phase-0
-   baseline (`git diff <phase-0 HEAD>..HEAD`; use git's empty-tree hash as the
-   base for a repo that had no commits) concatenated with the
-   `collect-diff.sh` output.
-2. Write `$SCRATCH/impl-review-prompt.md` using the **Impl-review template** below
-   (reference each `$SCRATCH/diff-<repo>.patch` by absolute path, include the
-   dismissed ledger).
-3. Run: `set -o pipefail; codex-review.sh "$SCRATCH/impl-review-prompt.md" <medium|high> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/impl-review-round-N.md"`
-   (the effort argument is the current tier's; without `pipefail`, `tee` would
-   mask a codex hard failure as exit 0).
-4. Parse:
-   - Final line **`NO ISSUES FOUND`** → **converged**, exit loop (or move
-     medium→high if this was the medium tier). If the high tier converges clean
-     this way — without the transition rule below ever firing — the sweep is
-     **optional**: run it only when the run's findings suggest unswept siblings;
-     a run that ends with codex finding nothing needs no sweep.
-   - Findings → judge each: valid → **fix the code** (yourself or via a reviewed
-     subagent), re-run the affected repo's gates; invalid/intentional → add
-     to the dismissed/residual ledger, **don't change the code**.
-   - Regenerate diffs and re-review.
-5. **Classify every valid finding** as you fix it (one word in the round log):
-   - **NEW-CLASS** — a kind of bug not seen before in this run (a new rule could
-     be written from it).
-   - **KNOWN-SITE** — an already-established rule missing at one more call site.
-   - **FOLLOW-ON** — a defect in a fix made earlier in this run.
-6. **Fix the class, not the instance.** When a finding generalizes to a rule,
-   apply the fix at **every analogous site in the same pass** — grep for the
-   pattern; don't wait for codex to find the siblings one round at a time. Pin
-   each regression test at the **exact seam** (counted-wrapper injection where
-   ordering matters — a nearby-seam test can pass without exercising the fix).
+1. **Diffs:** for every repo, `collect-diff.sh <repo> > "$SCRATCH/diff-<slug>.patch"`.
+   If the user asked for commits along the way, prepend the committed span
+   since the Phase-0 HEAD (`git diff <phase-0 HEAD>..HEAD`; git's empty-tree
+   hash for a repo that had no commits) — `collect-diff.sh` alone would drop
+   it. This is the only place diffs are built; a fix always leads back here.
+2. **Prompt:** write `$SCRATCH/impl-review-prompt.md` from the template. Keep
+   it stable across rounds: reference `plan.md`, the diffs and `ledger.md` by
+   path, never inline them.
+3. **Run:**
+   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/impl-review-round-N.answer.json" codex-review.sh "$SCRATCH/impl-review-prompt.md" <medium|high> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/impl-review-round-N.md"`
+   (`pipefail` so `tee` cannot mask a codex failure).
+4. **Judge** from the answer file only. `findings: []` → tier converged (medium
+   → start high; high → Phase 4 ends, sweep optional per the footnote).
+   Otherwise, per finding, **verify against the code**: valid → fix (yourself
+   or a reviewed subagent), re-run that repo's gates; invalid / intentional →
+   append to `ledger.md` with a one-line reason, leave the code alone. A round
+   whose findings are all already ledgered counts as converged.
+5. **Classify** each valid finding in the round log: **NEW-CLASS** (a rule
+   could be written from it) / **KNOWN-SITE** (an established rule missing at
+   one more site) / **FOLLOW-ON** (a defect in one of this run's own fixes).
+6. **Fix the class, not the instance:** grep for and fix every analogous site
+   in the same pass; pin regression tests at the **exact seam** (counted-wrapper
+   injection where ordering matters).
 
-**Phase transition → discipline sweep.** After **2 consecutive rounds with no
-NEW-CLASS finding** (severity is a noisy signal — highs keep appearing in the
-tail), stop the per-finding ladder and sweep. This rule **overrides** tier
-progression: if it fires during the medium tier, skip the high per-finding tier
-entirely — the sweep plus the high-effort capped verification rounds take its
-place. Sweep:
-- Distill this run's findings into **named rules/disciplines** (e.g.
-  identity-gating, error taxonomy, arithmetic dedup, last-instant ordering,
-  compare-and-write, alarm consistency — whatever the run actually taught).
-- Fan out **parallel read-only audit subagents** (strong model), one rule
-  each, over the whole touched surface. Demand: file:line evidence, a concrete
-  failure scenario, CONFIRMED/PLAUSIBLE confidence, and an explicit
-  **"checked clean"** list (negative coverage the ladder never gives you).
-- **Personally verify every audit finding against the cited code before fixing**
-  — audit agents can present unverified or fabricated corroboration; nothing is
-  fixed on an auditor's say-so. Fix the survivors in one pass; declined findings
-  go in the ledger as **accepted residuals** with rationale.
-- Then run **capped verification rounds** (effort and cap per the intensity
-  profile — 5 at `high` for the default profile): first clean round ends
-  Phase 4. If findings survive, they are judged/fixed as usual and the cap ticks
-  down.
+**Phase transition.** After **2 consecutive rounds with no NEW-CLASS finding**
+(severity is a noisy signal — highs keep appearing in the tail), stop the
+ladder even mid-tier — this **overrides** tier progression; a skipped high
+tier is replaced by the sweep plus high-effort verification. Backstop: force
+it at **25 rounds in one tier**.
 
-**Termination:**
-- A round whose findings are **all already in the ledger** counts as converged.
-  Feed the ledger (dismissals + accepted residuals) back into **every** prompt —
-  the ledger is what makes "clean" reachable at all against an adversarial
-  reviewer that can otherwise re-derive residual race windows forever.
-- **Runaway backstop:** if the per-finding ladder somehow reaches **25 rounds in
-  one tier**, force the phase transition (sweep + capped verification) even if
-  new classes are still trickling in.
+**Sweep.** Distill this run's findings into **named rules** (identity-gating,
+error taxonomy, arithmetic dedup, ordering, compare-and-write, … whatever the
+run taught). Fan out **parallel read-only audit subagents**, one rule each,
+over the whole touched surface, demanding file:line evidence, a concrete
+failure scenario, CONFIRMED/PLAUSIBLE confidence, and an explicit
+**"checked clean"** list. Auditors can present unverified or fabricated
+corroboration: verify every citation yourself, fix the survivors in one pass
+(gates green), ledger the declined ones as **accepted residuals**.
 
----
+**Capped verification.** Rounds per the profile with the full ledger in the
+prompt. The first converged round (empty `findings`, or all findings already
+ledgered) ends Phase 4; genuinely new findings are judged/fixed as usual and
+the cap ticks down; if the cap expires with findings still arriving,
+stop and report them verbatim.
+
+If the ladder keeps surfacing the same area, the **plan** may be wrong — fix
+upstream rather than patching symptoms.
 
 ## Phase 5 — Report
 
-Post a single final report to the user:
-
-- **What was built** — the change, per repo, with the key files/commits touched.
-- **Plan sanity pass** — whether it ran; notable findings codex caught and how
-  the plan changed; any findings deliberately ledgered instead of fixed.
-- **Implementation-review loop** — rounds run per tier (medium/high), the
-  finding-class breakdown (new-class / known-site / follow-on), whether and when
-  the phase transition fired, sweep results (findings fixed vs accepted
-  residuals, per discipline), and how convergence ended (`NO ISSUES FOUND`,
-  all-ledger fixed point, or forced transition).
-- **Dismissed findings** — the ledger: each finding you intentionally didn't act
-  on, with the one-line rationale. This is a decision record, not filler.
-- **Verification** — repo gate results (tests/lint/typecheck) per repo.
-- **Follow-ups / risks** — anything left open.
-
-Leave changes **uncommitted** unless the user asked otherwise (respect the
-harness rule: commit/push only when asked). Point them at `$SCRATCH` for the
-full per-round codex transcripts.
-
----
+One final report: **what was built** per repo (key files/commits); **plan
+sanity pass** (ran? notable findings, plan changes, ledgered items);
+**review loop** (rounds per tier, finding-class breakdown, when the transition
+fired, sweep results per rule — fixed vs accepted residual — and how it ended:
+empty findings, all-ledger fixed point, or forced transition); the **ledger**
+verbatim (a decision record); **gate results** per repo; **follow-ups /
+risks**. Leave changes **uncommitted** unless asked. Point at `$SCRATCH` for
+transcripts.
 
 ## Codex prompt templates
 
-Both templates must demand the same machine-checkable contract:
+Both must end with the same output contract (the helper enforces the schema;
+the sentence keeps the reviewer honest about what "empty" means):
 
-> End your response with **either** a line that is exactly `NO ISSUES FOUND`
-> (only when you found zero issues), **or** a numbered findings list and **no**
-> sentinel line. Never emit both.
+> OUTPUT: JSON matching the provided schema. `findings` is a list of
+> `{severity: blocker|major|minor, location: file:line (or plan section),
+> problem, fix}`. Report an EMPTY `findings` list if and only if you found zero
+> issues.
 
-### Plan-review template (single sanity pass — write to `$SCRATCH/plan-review-prompt.md`)
+### Plan-review template (`$SCRATCH/plan-review-prompt.md`)
 
 ```
 You are a rigorous staff engineer reviewing an implementation PLAN (not code yet).
@@ -313,25 +232,22 @@ REPOS INVOLVED (read them from disk to sanity-check feasibility):
 - /absolute/path/to/repo-a
 - /absolute/path/to/repo-b
 
-THE PLAN under review:
-<paste the full contents of plan.md here, or say "see <absolute $SCRATCH path>/plan.md">
+THE PLAN under review: <absolute $SCRATCH path>/plan.md
 
 Find everything that would make this plan fail, ship incomplete, or cause a
 correctness/security/data-integrity problem: wrong or missing files & APIs,
-invalid assumptions about how the current code works, missing steps, bad ordering
-or dependency mistakes, unhandled edge cases and failure modes, migration/backfill
-gaps, and cross-repo contract mismatches. Verify claims against the actual code
-on disk. Prefer a few real blockers over a pile of nitpicks.
+invalid assumptions about how the current code works, missing steps, bad
+ordering or dependency mistakes, unhandled edge cases and failure modes,
+migration/backfill gaps, cross-repo contract mismatches. Verify claims against
+the actual code on disk. Prefer a few real blockers over a pile of nitpicks.
 
-PREVIOUSLY REVIEWED — intentionally NOT changed, do NOT re-raise:
-<dismissed ledger, or "none yet">
+PREVIOUSLY REVIEWED — intentionally NOT changed, do NOT re-raise anything in:
+<absolute $SCRATCH path>/ledger.md   (or: "none yet")
 
-OUTPUT: A numbered list. Each finding: [SEVERITY blocker|major|minor] — plan
-section and/or file:line — the problem — a concrete fix. If and only if you find
-zero issues, reply with exactly one line: NO ISSUES FOUND
+OUTPUT: <the output contract above>
 ```
 
-### Impl-review template (write to `$SCRATCH/impl-review-prompt.md`)
+### Impl-review template (`$SCRATCH/impl-review-prompt.md`)
 
 ```
 You are a rigorous staff engineer reviewing a code DIFF that implements a plan.
@@ -339,68 +255,28 @@ You are a rigorous staff engineer reviewing a code DIFF that implements a plan.
 GOAL / TASK:
 <one-paragraph statement of what was built>
 
-THE PLAN it should satisfy:
-<paste plan.md, or "see <absolute $SCRATCH path>/plan.md">
+THE PLAN it should satisfy: <absolute $SCRATCH path>/plan.md
 
 REPOS INVOLVED (full source on disk, for context):
 - /absolute/path/to/repo-a
 - /absolute/path/to/repo-b
 
 THE DIFF under review (full working-tree change per repo):
-- <absolute $SCRATCH path>/diff-<repo-a>.patch
-- <absolute $SCRATCH path>/diff-<repo-b>.patch
+- <absolute $SCRATCH path>/diff-<slug-a>.patch
+- <absolute $SCRATCH path>/diff-<slug-b>.patch
 
-<if any Phase-0 baseline showed changes, add:>
-OUT OF SCOPE — these files/hunks were already modified before this task started
-(see <absolute $SCRATCH path>/baseline-<repo>.patch); review only the changes beyond them:
-<summarize the pre-existing changes>
+<if any Phase-0 baseline showed changes:>
+OUT OF SCOPE — already modified before this task started (see
+<absolute $SCRATCH path>/baseline-<slug>.patch); review only changes beyond them:
+<one-line summary>
 
+Review for: correctness bugs, deviations from the plan, missing pieces, broken
+or missing error handling, security holes, data-integrity/migration problems,
+edge cases, regressions, and anything that would fail the repo's own tests.
+Point to exact file:line. Prefer real defects over style nits.
 
-Review for: correctness bugs, deviations from the plan, missing pieces, broken or
-missing error handling, security holes, data-integrity/migration problems, edge
-cases, regressions, and anything that would fail the repo's own tests. Point to
-exact file:line in the diff. Prefer real defects over style nits.
+PREVIOUSLY REVIEWED — intentionally NOT changed, and ACCEPTED RESIDUALS — do
+NOT re-raise anything in: <absolute $SCRATCH path>/ledger.md   (or: "none yet")
 
-PREVIOUSLY REVIEWED — intentionally NOT changed, do NOT re-raise:
-<dismissed ledger, or "none yet">
-
-OUTPUT: A numbered list. Each finding: [SEVERITY blocker|major|minor] —
-file:line — the problem — a concrete fix. If and only if you find zero issues,
-reply with exactly one line: NO ISSUES FOUND
+OUTPUT: <the output contract above>
 ```
-
----
-
-## Parsing & judgment notes
-
-- **Convergence check — read, don't grep.** The `tee`'d transcript is codex's full
-  session stream: it contains an **echo of your prompt** (which itself includes
-  the literal string `NO ISSUES FOUND` in the output instructions) and trailing
-  metadata like a `tokens used` line — so naive "last line" or whole-file grep
-  matching gives false positives. Read the round file, find codex's **final
-  answer**, and treat the round as clean only when that answer is the bare
-  sentinel with no findings list. When ambiguous, assume NOT converged and run
-  another round.
-- **Codex hard failures are not findings.** If `codex-review.sh` exits non-zero
-  (auth, network, timeout — exit 124), that round produced no review: retry once;
-  if it fails again, **stop the loop and report the error state** in the final
-  report rather than spinning on a broken pipeline. Never count a failed round as
-  converged.
-- **You are the arbiter, not codex.** Every finding gets your judgment. Fix the
-  real ones; dismiss the wrong/intentional ones *with a written reason*. Silently
-  ignoring a finding is not allowed — it either changes the artifact or enters the
-  ledger.
-- **The ledger is what makes an unbounded loop terminate.** Feed it back every
-  round so codex stops re-raising settled points, and count an all-ledger round as
-  converged.
-- **Cost awareness:** the medium tier exists to keep the high tier short. If an
-  impl loop keeps surfacing the *same* area round after round, consider whether
-  the **plan** was wrong and fix upstream rather than patching symptoms — that's
-  cheaper than more rounds.
-- **The ladder is a discovery tool, not a completion tool.** Its job is to teach
-  you the bug classes; closing every instance of a known class is YOUR job (sweep),
-  and proving closure is a capped verification round's job. Letting the ladder do
-  all three is what produces 70-round runs.
-- **Sweep auditors are advisors, not authorities.** Verify their citations
-  yourself; require checked-clean lists; treat any corroboration you didn't
-  witness as unverified.

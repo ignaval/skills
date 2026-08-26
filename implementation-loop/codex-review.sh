@@ -3,7 +3,7 @@
 #
 # Sandboxing: `codex exec -s read-only` — model-generated shell commands can
 # read the filesystem but write nothing. exec mode is non-interactive, so no
-# approval prompts, and no external sandbox (no Docker) is required.
+# approval prompts and no external sandbox are required.
 #
 # TRUST BOUNDARY: read-only protects your files from writes; the reviewer can
 # still READ broadly on your machine. Only review repos whose content you
@@ -24,26 +24,39 @@
 #   [effort]       codex reasoning effort: high (default) | medium | low.
 #                  Optional even when repos follow: a non-effort second
 #                  argument is treated as the first repo.
-#   [repo ...]     Repo paths the review covers. Each is validated to exist and
-#                  the FIRST becomes codex's working directory. Reference repos
-#                  and diff/plan files by ABSOLUTE path in the prompt — the
-#                  reviewer reads them straight from disk.
+#   [repo ...]     Repo paths the review covers. Each is validated to exist;
+#                  the FIRST becomes codex's working directory (-C) and the
+#                  rest are granted as extra directories (--add-dir). Still
+#                  reference repos and diff/plan files by ABSOLUTE path in
+#                  the prompt.
+#
+# Outputs:
+#   stdout            codex's full session stream (shell calls, reasoning,
+#                     an ECHO OF THE PROMPT, token accounting). Keep it on
+#                     disk for humans; do NOT parse it.
+#   $CODEX_ANSWER_FILE
+#                     codex's FINAL ANSWER only, written via `-o`. This is
+#                     the file a caller reads. It is JSON matching
+#                     $CODEX_OUTPUT_SCHEMA (default: the colocated
+#                     findings.schema.json — `{"findings":[...]}`, empty
+#                     array = clean). Default path: <prompt-file>.answer.json
+#                     — pass a per-round path so rounds don't overwrite.
 #
 # Env overrides:
-#   CODEX_MODEL       codex model id      (default: gpt-5.6-sol)
-#   CODEX_TIMEOUT     seconds per call    (default: 3600; exit 124 on hit)
-#   CODEX_EXTRA_ARGS  extra flags appended to `codex exec`, whitespace-split
-#                     (e.g. "--ephemeral --ignore-user-config").
+#   CODEX_MODEL          codex model id   (default: gpt-5.6-sol)
+#   CODEX_TIMEOUT        seconds per call (default: 3600; exit 124 on hit)
+#   CODEX_ANSWER_FILE    where the final answer goes (see above)
+#   CODEX_OUTPUT_SCHEMA  JSON Schema for the final answer; "none" disables
+#                        the schema (final answer is then free text)
+#   CODEX_EXTRA_ARGS     extra flags appended to `codex exec`, whitespace-split
+#                        (e.g. "--ephemeral --ignore-user-config").
 #
 # The sandbox mode is HARDCODED to read-only on purpose — an autonomous
 # reviewer must never write. If you need something else, you are not running
 # a review; edit the script and own the consequences.
 #
-# Output: codex's full response streams to stdout. NOTE for the caller: the
-#   stream includes an ECHO OF THE PROMPT and trailing token accounting — do not
-#   grep the raw transcript for the sentinel; judge codex's final answer.
-#   Exit code is codex's (non-zero only on execution/auth/network/timeout
-#   errors, NOT on "found issues" — findings are normal successful output).
+# Exit code is codex's (non-zero only on execution/auth/network/timeout
+# errors, NOT on "found issues" — findings are normal successful output).
 set -euo pipefail
 
 PROMPT_FILE="${1:?usage: codex-review.sh <prompt-file> [effort] [repo ...]}"
@@ -53,8 +66,10 @@ case "${2:-}" in
   *)               EFFORT="high"; REPOS=( "${@:2}" ) ;;
 esac
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODEL="${CODEX_MODEL:-gpt-5.6-sol}"
 TIMEOUT="${CODEX_TIMEOUT:-3600}"
+SCHEMA="${CODEX_OUTPUT_SCHEMA:-$HERE/findings.schema.json}"
 
 die() { echo "codex-review: $*" >&2; exit 2; }
 
@@ -67,33 +82,58 @@ fi
 [[ -f "$PROMPT_FILE" ]] || die "prompt file not found: $PROMPT_FILE"
 case "$EFFORT" in high|medium|low) ;; *) die "effort must be high|medium|low (got: $EFFORT)";; esac
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "CODEX_TIMEOUT must be a positive integer number of seconds (got: $TIMEOUT)"
+if [[ "$SCHEMA" != none ]]; then
+  [[ -f "$SCHEMA" ]] || die "output schema not found: $SCHEMA (set CODEX_OUTPUT_SCHEMA=none for free text)"
+fi
 
 for r in "${REPOS[@]}"; do
   [[ -d "$r" ]] || die "repo not a directory: $r"
 done
 
 # Whitespace-split on purpose: operator-supplied flags. Flags that would
-# change or disable the sandbox are refused — read-only is this script's
-# contract, not a default.
+# change or disable the sandbox, or redirect the answer, are refused —
+# read-only is this script's contract, not a default.
 read -r -a EXTRA_ARGS <<< "${CODEX_EXTRA_ARGS:-}"
 for a in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
   case "$a" in
-    --dangerously-*|-s|--sandbox|-s=*|--sandbox=*)
+    --dangerously-*|-s*|--sandbox|--sandbox=*)
       die "CODEX_EXTRA_ARGS may not change the sandbox (refused: $a)";;
+    -o*|--output-last-message|--output-last-message=*|--output-schema|--output-schema=*|-C*|--cd|--cd=*|--add-dir|--add-dir=*)
+      die "CODEX_EXTRA_ARGS may not set the answer file, schema, cwd or extra dirs — use the env knobs / repo args (refused: $a)";;
   esac
 done
 
-# Absolute path before any cd — the prompt may have been given relative.
-PROMPT_ABS="$(cd "$(dirname "$PROMPT_FILE")" && pwd)/$(basename "$PROMPT_FILE")"
-
-# First repo (when given) becomes the working directory, so repo-relative
-# tooling behaves; prompts should still use absolute paths throughout.
-if [[ ${#REPOS[@]} -gt 0 ]]; then
-  cd "${REPOS[0]}"
+# Absolute paths — codex runs with its cwd set to the first repo.
+abspath() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
+PROMPT_ABS="$(abspath "$PROMPT_FILE")"
+ANSWER_FILE="${CODEX_ANSWER_FILE:-${PROMPT_FILE}.answer.json}"
+mkdir -p "$(dirname "$ANSWER_FILE")"
+ANSWER_ABS="$(abspath "$ANSWER_FILE")"
+SCHEMA_ABS=""
+if [[ "$SCHEMA" != none ]]; then SCHEMA_ABS="$(abspath "$SCHEMA")"; fi
+# The answer file is truncated before codex runs — never let it alias an input.
+# (-ef also catches symlink/hard-link aliases; it is false for a missing file.)
+if [[ "$ANSWER_ABS" == "$PROMPT_ABS" || "$ANSWER_ABS" -ef "$PROMPT_ABS" ]] \
+   || [[ -n "$SCHEMA_ABS" && ( "$ANSWER_ABS" == "$SCHEMA_ABS" || "$ANSWER_ABS" -ef "$SCHEMA_ABS" ) ]]; then
+  die "CODEX_ANSWER_FILE must not be the prompt or the schema: $ANSWER_ABS"
 fi
+: > "$ANSWER_ABS" || die "cannot write answer file: $ANSWER_ABS"
+
+CWD_ARGS=()
+ADD_DIR_ARGS=()
+if [[ ${#REPOS[@]} -gt 0 ]]; then
+  CWD_ARGS=( -C "$(cd "${REPOS[0]}" && pwd)" )
+  for r in "${REPOS[@]:1}"; do ADD_DIR_ARGS+=( --add-dir "$(cd "$r" && pwd)" ); done
+fi
+SCHEMA_ARGS=()
+if [[ -n "$SCHEMA_ABS" ]]; then SCHEMA_ARGS=( --output-schema "$SCHEMA_ABS" ); fi
 
 exec "$TIMEOUT_BIN" --kill-after=30s "${TIMEOUT}s" \
   codex exec -m "$MODEL" -c model_reasoning_effort="$EFFORT" \
   -s read-only --skip-git-repo-check \
+  ${CWD_ARGS[@]+"${CWD_ARGS[@]}"} \
+  ${ADD_DIR_ARGS[@]+"${ADD_DIR_ARGS[@]}"} \
+  ${SCHEMA_ARGS[@]+"${SCHEMA_ARGS[@]}"} \
+  -o "$ANSWER_ABS" \
   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
   - < "$PROMPT_ABS"
