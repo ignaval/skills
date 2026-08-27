@@ -6,7 +6,7 @@ adversarial reviewer), plus the helper scripts they share.
 
 | Skill | What it does |
 |---|---|
-| [`implementation-loop`](implementation-loop/SKILL.md) | Builds a non-trivial change end-to-end: plan → codex sanity pass on the plan → implement via reviewed subagents → convergence-managed codex review ladder over the diff → final report. Fully autonomous, multi-repo aware. |
+| [`implementation-loop`](implementation-loop/SKILL.md) | Builds a non-trivial change end-to-end: plan → codex sanity pass on the plan (money-path / schema / cross-repo work only) → implement via reviewed subagents → convergence-managed codex review ladder over the diff → final report. Fully autonomous, multi-repo aware. |
 | [`review-loop`](review-loop/SKILL.md) | Just the review machinery: takes the changes already made in the current session and hardens them through the same convergence-managed codex ladder, fixing valid findings and ledgering dismissals. |
 
 Both skills came out of long real-world campaigns. The design lessons baked in:
@@ -34,7 +34,8 @@ Both skills came out of long real-world campaigns. The design lessons baked in:
 
 - **Claude Code** (the skills are markdown instructions for it).
 - **Codex CLI**, installed and logged in: `npm install -g @openai/codex`,
-  then `codex login`. Check with `codex exec -s read-only "say ok"`.
+  then `codex login`. Check with
+  `codex exec --skip-git-repo-check -s read-only "say ok"`.
 - **GNU coreutils `timeout`** — present on Linux; on macOS
   `brew install coreutils` (the script finds `gtimeout` on its own).
 
@@ -111,9 +112,12 @@ points at.
 
 | Profile | Review ladder | Discipline sweep | Verification rounds | When |
 |---|---|---|---|---|
-| `high` (default) | medium-effort rounds until clean, then high-effort | yes | up to 5 at high | money paths, migrations, cross-repo contracts |
-| `medium` | medium-effort rounds only | yes | up to 2 at high | ordinary features |
+| `high` (default) | medium-effort rounds until clean, then high-effort | yes* | up to 5 at high | money paths, migrations, cross-repo contracts |
+| `medium` | medium-effort rounds only | yes* | up to 2 at high | ordinary features |
 | `low` | one medium-effort round + fixes | no | 1 at medium | small changes, quick sanity pass |
+
+\* Skipped only when the ladder converged fully clean without the
+phase-transition rule ever firing (no finding classes to generalize).
 
 A profile scales the **ceremony**, never the models. That is deliberate: a
 cheaper reviewer produces noisier findings that waste orchestrator judgment,
@@ -126,21 +130,23 @@ false economy. Models change only through `CODEX_MODEL` and `SUBAGENT_MODEL`.
 You do not need Claude Code to use the reviewer:
 
 ```bash
-# 1. Build a review diff for a repo (tracked changes vs HEAD + new files)
-~/.claude/skills/implementation-loop/collect-diff.sh ~/code/api > /tmp/diff-api.patch
+REPO="$HOME/code/api"          # the repo to review (absolute path)
+
+# 1. Build a review diff (tracked changes vs HEAD + new files)
+~/.claude/skills/implementation-loop/collect-diff.sh "$REPO" > /tmp/diff-api.patch
 
 # 2. Write a prompt that points at it by absolute path
-cat > /tmp/review.md <<'PROMPT'
+cat > /tmp/review.md <<PROMPT
 You are a rigorous staff engineer reviewing a code DIFF: /tmp/diff-api.patch
-Full source: /home/me/code/api
+Full source: $REPO
 Review for correctness bugs, security holes, data-integrity problems, races.
 OUTPUT: JSON matching the provided schema; an EMPTY findings list only if you found nothing.
 PROMPT
 
 # 3. One read-only review pass; the verdict lands in the answer file
 CODEX_ANSWER_FILE=/tmp/review-1.answer.json \
-  ~/.claude/skills/implementation-loop/codex-review.sh /tmp/review.md medium ~/code/api > /tmp/review-1.log
-jq . /tmp/review-1.answer.json
+  ~/.claude/skills/implementation-loop/codex-review.sh /tmp/review.md medium "$REPO" > /tmp/review-1.log
+cat /tmp/review-1.answer.json
 ```
 
 - **`codex-review.sh <prompt-file> [effort] [repo ...]`** — one review pass

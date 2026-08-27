@@ -2,7 +2,7 @@
 name: implementation-loop
 description: >-
   Autonomous build loop for non-trivial (often multi-repo) changes: plan →
-  single codex sanity pass on the plan → implement via reviewed subagents →
+  single codex sanity pass on the plan (contract-heavy work only) → implement via reviewed subagents →
   convergence-managed codex review ladder over the diff → report. Optional
   low|medium|high intensity profile (default high). Invoke via
   /implementation-loop.
