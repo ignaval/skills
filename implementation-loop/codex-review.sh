@@ -69,7 +69,9 @@ case "${2:-}" in
   *)               EFFORT="high"; REPOS=( "${@:2}" ) ;;
 esac
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Not symlink-resolved (no portable readlink -f on bash 3.2/macOS): keep
+# findings.schema.json beside this script; symlink the DIRECTORY, not the file.
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MODEL="${CODEX_MODEL:-gpt-5.6-sol}"
 TIMEOUT="${CODEX_TIMEOUT:-3600}"
 SCHEMA="${CODEX_OUTPUT_SCHEMA:-$HERE/findings.schema.json}"
@@ -89,14 +91,17 @@ if [[ "$SCHEMA" != none ]]; then
   [[ -f "$SCHEMA" ]] || die "output schema not found: $SCHEMA (set CODEX_OUTPUT_SCHEMA=none for free text)"
 fi
 
-for r in "${REPOS[@]}"; do
+for r in ${REPOS[@]+"${REPOS[@]}"}; do   # bash 3.2: empty-array guard under set -u
   [[ -d "$r" ]] || die "repo not a directory: $r"
 done
 
 # Whitespace-split on purpose: operator-supplied flags. Flags that would
 # change or disable the sandbox, or redirect the answer, are refused —
 # read-only is this script's contract, not a default.
-read -r -a EXTRA_ARGS <<< "${CODEX_EXTRA_ARGS:-}"
+# -d '' so newlines split too (IFS whitespace), not just the first line;
+# read returns non-zero at EOF in that mode, hence || true.
+EXTRA_ARGS=()
+read -r -d '' -a EXTRA_ARGS <<< "${CODEX_EXTRA_ARGS:-}" || true
 for a in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
   case "$a" in
     --dangerously-*|-s*|--sandbox|--sandbox=*)
@@ -109,7 +114,11 @@ for a in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
 done
 
 # Absolute paths — codex runs with its cwd set to the first repo.
-abspath() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
+abspath() {
+  local d
+  d="$(cd -- "$(dirname -- "$1")" && pwd)" || die "cannot resolve path: $1"
+  echo "$d/$(basename -- "$1")"
+}
 PROMPT_ABS="$(abspath "$PROMPT_FILE")"
 ANSWER_FILE="${CODEX_ANSWER_FILE:-${PROMPT_FILE}.answer.json}"
 mkdir -p "$(dirname "$ANSWER_FILE")"
@@ -127,8 +136,8 @@ fi
 CWD_ARGS=()
 ADD_DIR_ARGS=()
 if [[ ${#REPOS[@]} -gt 0 ]]; then
-  CWD_ARGS=( -C "$(cd "${REPOS[0]}" && pwd)" )
-  for r in "${REPOS[@]:1}"; do ADD_DIR_ARGS+=( --add-dir "$(cd "$r" && pwd)" ); done
+  CWD_ARGS=( -C "$(cd -- "${REPOS[0]}" && pwd)" )
+  for r in "${REPOS[@]:1}"; do ADD_DIR_ARGS+=( --add-dir "$(cd -- "$r" && pwd)" ); done
 fi
 SCHEMA_ARGS=()
 if [[ -n "$SCHEMA_ABS" ]]; then SCHEMA_ARGS=( --output-schema "$SCHEMA_ABS" ); fi

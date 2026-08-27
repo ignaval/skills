@@ -24,9 +24,12 @@ set -euo pipefail
 # No opportunistic index refresh, no repo-configured external diff/textconv
 # drivers. (Clean/process filters still run — see the caveat above.)
 export GIT_OPTIONAL_LOCKS=0
+# An inherited GIT_DIR (git hooks, `rebase --exec`) would silently point git
+# at ANOTHER repo while the untracked scan reads this one — half a patch.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
 
 REPO="${1:?usage: collect-diff.sh <repo-path>}"
-cd "$REPO"
+cd -- "$REPO"
 
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   echo "collect-diff: not a git repo: $REPO" >&2
