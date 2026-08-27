@@ -52,9 +52,9 @@ implementers buy extra review rounds).
 | `medium` | as written | `medium` tier only | yes* | 2 rounds at `high` |
 | `low` | skip | one `medium` round + fixes | no | 1 round at `medium` |
 
-\* Skippable only when the ladder converged fully clean without the
-phase-transition rule ever firing — then there are no finding classes to
-generalize.
+\* Skippable only when the whole ladder produced **zero valid findings** —
+then there is no class to generalize. One valid finding, even if the next
+round is clean, means its analogous sites were never audited: sweep.
 
 Judgment, ledger, finding classification and repo gates apply at every profile.
 
@@ -163,7 +163,7 @@ the profile table). Each round, either tier:
    `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/impl-review-round-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/impl-review-prompt.md" <medium|high> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/impl-review-round-N.md"`
    (`pipefail` so `tee` cannot mask a codex failure).
 4. **Judge** from the answer file only. `findings: []` → tier converged (medium
-   → start high; high → Phase 4 ends, sweep optional per the footnote).
+   → start high; high → ladder ends; sweep unless the footnote applies).
    Otherwise, per finding, **verify against the code**: valid → fix (yourself
    or a reviewed subagent), re-run that repo's gates; invalid / intentional →
    append to `ledger.md` with a one-line reason, leave the code alone. A round

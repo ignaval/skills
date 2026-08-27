@@ -41,8 +41,8 @@ noisier findings that waste orchestrator judgment).
 | `medium` | `medium` tier only | yes* | up to 2 rounds at `high` |
 | `low` | one `medium` round + fixes | skip | 1 round at `medium` |
 
-\* Skippable only when the ladder converged fully clean without the
-phase-transition rule ever firing.
+\* Skippable only when the whole ladder produced **zero valid findings**;
+one valid finding means its analogous sites were never audited: sweep.
 
 ## Shared machinery (from implementation-loop — do not duplicate)
 

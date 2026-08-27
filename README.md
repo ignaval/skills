@@ -116,8 +116,8 @@ dir — `/tmp` on Linux, `$TMPDIR` on macOS) the report points at.
 | `medium` | medium-effort rounds only | yes* | up to 2 at high | ordinary features |
 | `low` | one medium-effort round + fixes | no | 1 at medium | small changes, quick sanity pass |
 
-\* Skipped only when the ladder converged fully clean without the
-phase-transition rule ever firing (no finding classes to generalize).
+\* Skipped only when the whole review ladder produced zero valid findings
+(nothing to generalize).
 
 A profile scales the **ceremony**, never the models. That is deliberate: a
 cheaper reviewer produces noisier findings that waste orchestrator judgment,
