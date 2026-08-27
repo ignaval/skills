@@ -2,7 +2,7 @@
 
 Two [Claude Code](https://claude.com/claude-code) skills that pair Claude (as
 orchestrator, implementer, and judge) with OpenAI's `codex` CLI (as an
-adversarial reviewer), plus the sandboxed helper scripts they share.
+adversarial reviewer), plus the helper scripts they share.
 
 | Skill | What it does |
 |---|---|
@@ -30,108 +30,146 @@ Both skills came out of long real-world campaigns. The design lessons baked in:
   (`{"findings": [...]}`, empty = clean), so convergence is a mechanical check
   and no round costs the orchestrator a megabyte of context.
 
-## Intensity profiles
-
-Both skills accept an optional `low | medium | high` profile argument
-(default `high` — exactly the behavior described above). A profile scales the
-**ceremony** — which effort tiers run, whether the discipline sweep runs, the
-verification cap — never the models. That split is deliberate: a cheaper
-reviewer model produces noisier findings that waste orchestrator judgment, and
-cheaper implementation models buy extra review rounds, so swapping models is a
-false economy. Models are overridden explicitly instead: `CODEX_MODEL` for the
-reviewer, a `SUBAGENT_MODEL` argument for implementation/fix subagents. `low`
-is the "quick pass": one medium-effort review round plus fixes and a single
-verification round.
-
 ## Prerequisites
 
 - **Claude Code** (the skills are markdown instructions for it).
 - **Codex CLI**, installed and logged in: `npm install -g @openai/codex`,
-  then `codex login`. No Docker, no image builds.
-- **GNU coreutils `timeout`** — present on Linux; on macOS install coreutils
-  (`brew install coreutils`, the script finds `gtimeout` on its own).
+  then `codex login`. Check with `codex exec -s read-only "say ok"`.
+- **GNU coreutils `timeout`** — present on Linux; on macOS
+  `brew install coreutils` (the script finds `gtimeout` on its own).
 
-Reviews run under **codex's own read-only sandbox** (`codex exec -s
-read-only`): the reviewer reads your repos straight from disk and cannot
-write anything. On hardened kernels that restrict unprivileged user
-namespaces (e.g. Ubuntu 24.04 with
-`kernel.apparmor_restrict_unprivileged_userns=1`), codex's *bundled*
-bubblewrap fails with errors like `bwrap: loopback: Failed RTM_NEWADDR` —
-fix it by installing the system package (`sudo apt install bubblewrap`),
-which ships the AppArmor profile that unblocks it.
+No Docker, no image builds, no daemons.
 
-### Security note
+## Install
+
+```bash
+git clone https://github.com/ignaval/skills.git
+cd skills
+mkdir -p ~/.claude/skills && cp -r implementation-loop review-loop ~/.claude/skills/
+```
+
+Install **both** directories: `review-loop` reuses `implementation-loop`'s
+scripts and schema rather than shipping copies. The SKILL.md files reference
+them at `~/.claude/skills/implementation-loop/`; if you install elsewhere,
+update those paths.
+
+Sanity-check the helper once (the answer lands next to the prompt):
+
+```bash
+echo "Read README.md in the current directory. Report zero findings." > /tmp/hello.md
+~/.claude/skills/implementation-loop/codex-review.sh /tmp/hello.md low "$PWD" > /tmp/hello.log
+cat /tmp/hello.md.answer.json     # -> {"findings":[]}
+```
+
+## How to use
+
+Open a Claude Code session in the repo you are working on and type one of
+the slash commands. Arguments are free-form prose — the model reads them, so
+plain English works alongside the named knobs.
+
+**Build something new** — plan, codex-check the plan, implement, review
+until clean, report:
+
+```text
+/implementation-loop add rate limiting to the webhook endpoints, config-driven
+/implementation-loop medium add a CSV export to the reports page
+/implementation-loop the API lives in ../api and the client in ../webapp; add a "pause savings" flow end to end
+```
+
+**Harden work you already did** in the current session (uncommitted or
+committed during the conversation):
+
+```text
+/review-loop
+/review-loop low
+```
+
+**Knobs** (all optional):
+
+| Knob | Where | Effect |
+|---|---|---|
+| `low` / `medium` / `high` | first word of the arguments | Intensity profile, default `high` — see below |
+| `SUBAGENT_MODEL=<model>` | in the arguments | Model for implementation / fix / audit subagents (default `opus`) |
+| `CODEX_MODEL=<id>` | shell env before starting Claude Code | Reviewer model (default `gpt-5.6-sol`) |
+| `CODEX_TIMEOUT=<seconds>` | shell env | Per-round cap (default 3600) |
+| `CODEX_EXTRA_ARGS="..."` | shell env | Extra `codex exec` flags, e.g. `--ephemeral` |
+
+**What happens.** Both skills run fully autonomously — no approval gates, no
+questions — and narrate progress through the task list. Each codex round
+reads your repos from disk under codex's read-only sandbox and returns a JSON
+findings list; the orchestrating model verifies every finding against the
+code before fixing it or writing a dismissal reason into a ledger that is fed
+back into the next round. The run ends with one report: what changed per
+repo, rounds per tier, every finding fixed, every finding dismissed with its
+reason, and test/lint results. Changes are left **uncommitted** unless you
+asked for commits (`review-loop` matches whatever commit style the session
+already used). Per-round transcripts, answers, diffs, prompts and the ledger
+land in a scratch directory (`/tmp/iloop-*` or `/tmp/rloop-*`) the report
+points at.
+
+### Intensity profiles
+
+| Profile | Review ladder | Discipline sweep | Verification rounds | When |
+|---|---|---|---|---|
+| `high` (default) | medium-effort rounds until clean, then high-effort | yes | up to 5 at high | money paths, migrations, cross-repo contracts |
+| `medium` | medium-effort rounds only | yes | up to 2 at high | ordinary features |
+| `low` | one medium-effort round + fixes | no | 1 at medium | small changes, quick sanity pass |
+
+A profile scales the **ceremony**, never the models. That is deliberate: a
+cheaper reviewer produces noisier findings that waste orchestrator judgment,
+and cheaper implementers buy extra review rounds, so swapping models is a
+false economy. Models change only through `CODEX_MODEL` and `SUBAGENT_MODEL`.
+`implementation-loop low` also skips the plan sanity pass.
+
+### Using the helpers directly
+
+You do not need Claude Code to use the reviewer:
+
+```bash
+# 1. Build a review diff for a repo (tracked changes vs HEAD + new files)
+~/.claude/skills/implementation-loop/collect-diff.sh ~/code/api > /tmp/diff-api.patch
+
+# 2. Write a prompt that points at it by absolute path
+cat > /tmp/review.md <<'PROMPT'
+You are a rigorous staff engineer reviewing a code DIFF: /tmp/diff-api.patch
+Full source: /home/me/code/api
+Review for correctness bugs, security holes, data-integrity problems, races.
+OUTPUT: JSON matching the provided schema; an EMPTY findings list only if you found nothing.
+PROMPT
+
+# 3. One read-only review pass; the verdict lands in the answer file
+CODEX_ANSWER_FILE=/tmp/review-1.answer.json \
+  ~/.claude/skills/implementation-loop/codex-review.sh /tmp/review.md medium ~/code/api > /tmp/review-1.log
+jq . /tmp/review-1.answer.json
+```
+
+- **`codex-review.sh <prompt-file> [effort] [repo ...]`** — one review pass
+  under `codex exec -s read-only`. The first repo is codex's working
+  directory (`-C`), the rest are granted with `--add-dir`. The session
+  stream goes to stdout (keep it for humans, never parse it); the **final
+  answer** goes to `$CODEX_ANSWER_FILE` (default `<prompt-file>.answer.json`)
+  as JSON validated against `implementation-loop/findings.schema.json`
+  (`{"findings":[{severity, location, problem, fix}]}`). `CODEX_OUTPUT_SCHEMA`
+  swaps the schema or, as `none`, gives free text — for direct use only; the
+  skills pin the bundled schema. The sandbox mode is hardcoded to read-only,
+  and `CODEX_EXTRA_ARGS` cannot change it, the answer path, or the
+  directories in scope.
+- **`collect-diff.sh <repo-path>`** — comprehensive, binary-safe, read-only
+  review diff for one repo, with a loud warning when it is too large for one
+  round.
+
+## Security note
 
 Read-only protects your files from writes; the reviewer can still **read**
 broadly on your machine while reviewing. Only review repos whose content you
 trust not to prompt-inject the reviewer. `CODEX_EXTRA_ARGS="--ephemeral"`
 keeps session history out of `~/.codex` on codex versions that support it.
 
-## Install
-
-Copy (or symlink) the two skill directories into your Claude Code skills dir:
-
-```bash
-mkdir -p ~/.claude/skills && cp -r implementation-loop review-loop ~/.claude/skills/
-```
-
-> The SKILL.md files reference the helper scripts at
-> `~/.claude/skills/implementation-loop/` — if you install somewhere else,
-> update those paths.
-
-## Usage
-
-Invoke from any Claude Code session. Arguments are free-form prose — the model
-reads them, so plain English works alongside the named knobs:
-
-```text
-# Build a change end-to-end, full ceremony (default profile: high)
-/implementation-loop add rate limiting to the webhook endpoints, config-driven
-
-# Same, mid-cost: medium-effort ladder only, 2 verification rounds
-/implementation-loop medium add a CSV export to the reports page
-
-# Harden work you already did in this session (uncommitted or committed)
-/review-loop
-
-# Quick pass over the session's changes: one review round + fixes
-/review-loop low
-
-# Override the implementation/fix subagent model for this run
-/implementation-loop SUBAGENT_MODEL=haiku rename the config keys across both repos
-```
-
-The reviewer model is set per-shell instead (`CODEX_MODEL=<id>`), since the
-helper script reads it directly.
-
-**What a run looks like:** both skills run fully autonomously — no approval
-gates — and narrate progress as they go. They end with a single report: what
-changed per repo, rounds per tier, every finding fixed, and every finding
-dismissed with its reason. Changes are left **uncommitted** unless you asked
-for commits (`review-loop` matches whatever commit style the session already
-used). Full per-round codex transcripts land in a scratch directory the report
-points at.
-
-## Helper scripts
-
-- **`implementation-loop/codex-review.sh <prompt-file> [effort] [repo ...]`** —
-  one codex review pass under codex's read-only sandbox. The first repo
-  becomes codex's working directory (`-C`), the rest are granted with
-  `--add-dir`; the prompt is piped in on stdin. The session stream goes to
-  stdout; the **final answer** goes to `$CODEX_ANSWER_FILE` (default
-  `<prompt-file>.answer.json`) as JSON validated against
-  `implementation-loop/findings.schema.json`. (`CODEX_OUTPUT_SCHEMA` swaps
-  the schema, `none` gives free text — for direct helper use only; the
-  skills assume the bundled schema.) The sandbox mode is hardcoded to `read-only` —
-  an autonomous reviewer must never write. Other knobs: `CODEX_MODEL`,
-  `CODEX_TIMEOUT`, `CODEX_EXTRA_ARGS`.
-- **`implementation-loop/collect-diff.sh <repo-path>`** — a comprehensive,
-  binary-safe, read-only review diff for one repo: tracked changes vs HEAD plus
-  full contents of new untracked files, with a loud warning when the diff is
-  too large for one review round.
-
-`review-loop` deliberately reuses `implementation-loop`'s scripts rather than
-shipping copies — install both directories.
+On hardened kernels that restrict unprivileged user namespaces (e.g. Ubuntu
+24.04 with `kernel.apparmor_restrict_unprivileged_userns=1`), codex's
+*bundled* bubblewrap fails with errors like `bwrap: loopback: Failed
+RTM_NEWADDR` — install the system package (`sudo apt install bubblewrap`),
+which ships the AppArmor profile that unblocks it.
 
 ## License
 
