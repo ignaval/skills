@@ -85,14 +85,14 @@ phase-transition rule ever firing.
 Each round (`medium` until converged, then restart at `high`, trimmed by the
 profile):
 
-1. **Diffs:** per repo, `git diff BASE..HEAD` followed by `collect-diff.sh <repo>`,
+1. **Diffs:** per repo, `git diff BASE..HEAD` followed by `~/.claude/skills/implementation-loop/collect-diff.sh <repo>`,
    concatenated into `$SCRATCH/diff-<slug>.patch`. Always both — fixes change
    the diff, and fixes committed per round would otherwise vanish. This is the
    only place diffs are built; a fix always leads back here.
 2. **Prompt:** `$SCRATCH/review-prompt.md` from the template — stable across
    rounds, everything by path.
 3. **Run:**
-   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/round-<tier>-N.answer.json" codex-review.sh "$SCRATCH/review-prompt.md" <medium|high> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/round-<tier>-N.md"`
+   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/round-<tier>-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/review-prompt.md" <medium|high> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/round-<tier>-N.md"`
 4. **Judge** from the answer file only. `findings: []` (or all findings already
    ledgered) → tier converged. Otherwise verify each finding against the code:
    valid → fix (yourself or a reviewed subagent), re-run that repo's gates;
@@ -107,7 +107,7 @@ profile):
 
 **Phase transition:** after **2 consecutive rounds with no NEW-CLASS finding**,
 stop the ladder even mid-tier (this **overrides** tier progression — a skipped
-high tier is replaced by the sweep plus Phase 3). Backstop: force it at **25
+high tier is replaced by the sweep plus Phase 3 at the profile's effort). Backstop: force it at **25
 rounds in one tier**.
 
 ## Phase 2 — Discipline sweep

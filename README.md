@@ -26,8 +26,8 @@ Both skills came out of long real-world campaigns. The design lessons baked in:
   model verifying it against the actual code.
 - **The orchestrator reads answers, not transcripts.** A codex round's session
   stream is easily 2 MB (every shell call echoed) while its verdict is 3 KB.
-  The helper writes the final answer to its own file as schema-checked JSON
-  (`{"findings": [...]}`, empty = clean), so convergence is a mechanical check
+  The helper has codex write the final answer to its own file, constrained
+  to a JSON schema (`{"findings": [...]}`, empty = clean), so convergence is a mechanical check
   and no round costs the orchestrator a megabyte of context.
 
 ## Prerequisites
@@ -105,8 +105,8 @@ repo, rounds per tier, every finding fixed, every finding dismissed with its
 reason, and test/lint results. Changes are left **uncommitted** unless you
 asked for commits (`review-loop` matches whatever commit style the session
 already used). Per-round transcripts, answers, diffs, prompts and the ledger
-land in a scratch directory (`/tmp/iloop-*` or `/tmp/rloop-*`) the report
-points at.
+land in a scratch directory (`iloop-*` / `rloop-*` under your system temp
+dir — `/tmp` on Linux, `$TMPDIR` on macOS) the report points at.
 
 ### Intensity profiles
 
@@ -146,6 +146,7 @@ PROMPT
 # 3. One read-only review pass; the verdict lands in the answer file
 CODEX_ANSWER_FILE=/tmp/review-1.answer.json \
   ~/.claude/skills/implementation-loop/codex-review.sh /tmp/review.md medium "$REPO" > /tmp/review-1.log
+echo "exit=$?"                   # 0 = a review happened; then read the verdict
 cat /tmp/review-1.answer.json
 ```
 
@@ -154,12 +155,16 @@ cat /tmp/review-1.answer.json
   directory (`-C`), the rest are granted with `--add-dir`. The session
   stream goes to stdout (keep it for humans, never parse it); the **final
   answer** goes to `$CODEX_ANSWER_FILE` (default `<prompt-file>.answer.json`)
-  as JSON validated against `implementation-loop/findings.schema.json`
-  (`{"findings":[{severity, location, problem, fix}]}`). `CODEX_OUTPUT_SCHEMA`
+  as JSON constrained by `implementation-loop/findings.schema.json`
+  (`{"findings":[{severity, location, problem, fix}]}`) through codex's
+  `--output-schema`. **Check the exit code first:** non-zero (auth, network,
+  timeout = 124) means no review happened and the answer file is removed —
+  never read an answer without a zero exit. `CODEX_OUTPUT_SCHEMA`
   swaps the schema or, as `none`, gives free text — for direct use only; the
   skills pin the bundled schema. The sandbox mode is hardcoded to read-only,
-  and `CODEX_EXTRA_ARGS` cannot change it, the answer path, or the
-  directories in scope.
+  and `CODEX_EXTRA_ARGS` refuses anything that could change it (including
+  `-c`/`--config` and `-p`/`--profile` overrides), the answer file, the
+  schema, or the directories in scope.
 - **`collect-diff.sh <repo-path>`** — comprehensive, binary-safe, read-only
   review diff for one repo, with a loud warning when it is too large for one
   round.

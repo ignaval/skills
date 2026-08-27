@@ -91,7 +91,7 @@ through the two colocated helpers (prerequisites in the repo README):
    absolute paths in `REPOS=(...)`, and give each a unique **slug** (basename,
    suffixed on collision) used in every `$SCRATCH` filename. Every later phase
    must cover all of them.
-3. **Baseline per repo:** `collect-diff.sh <repo> > "$SCRATCH/baseline-<slug>.patch"`
+3. **Baseline per repo:** `~/.claude/skills/implementation-loop/collect-diff.sh <repo> > "$SCRATCH/baseline-<slug>.patch"`
    and record `git rev-parse HEAD` (or "no commits yet"). If a baseline's
    `git status --short` section is non-empty (the file always has headers —
    don't test emptiness) the repo was already dirty: mark those changes **out
@@ -151,7 +151,7 @@ verification that proves closure.
 **Tier order:** `medium` until converged, then restart at `high` (trimmed by
 the profile table). Each round, either tier:
 
-1. **Diffs:** for every repo, `collect-diff.sh <repo> > "$SCRATCH/diff-<slug>.patch"`.
+1. **Diffs:** for every repo, `~/.claude/skills/implementation-loop/collect-diff.sh <repo> > "$SCRATCH/diff-<slug>.patch"`.
    If the user asked for commits along the way, prepend the committed span
    since the Phase-0 HEAD (`git diff <phase-0 HEAD>..HEAD`; git's empty-tree
    hash for a repo that had no commits) — `collect-diff.sh` alone would drop
@@ -160,7 +160,7 @@ the profile table). Each round, either tier:
    it stable across rounds: reference `plan.md`, the diffs and `ledger.md` by
    path, never inline them.
 3. **Run:**
-   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/impl-review-round-N.answer.json" codex-review.sh "$SCRATCH/impl-review-prompt.md" <medium|high> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/impl-review-round-N.md"`
+   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/impl-review-round-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/impl-review-prompt.md" <medium|high> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/impl-review-round-N.md"`
    (`pipefail` so `tee` cannot mask a codex failure).
 4. **Judge** from the answer file only. `findings: []` → tier converged (medium
    → start high; high → Phase 4 ends, sweep optional per the footnote).

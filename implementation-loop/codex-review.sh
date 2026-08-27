@@ -57,6 +57,9 @@
 #
 # Exit code is codex's (non-zero only on execution/auth/network/timeout
 # errors, NOT on "found issues" — findings are normal successful output).
+# On non-zero exit the answer file is REMOVED; exit 2 if codex exited 0 but
+# left it empty. So: a present, non-empty answer file always means a review
+# happened.
 set -euo pipefail
 
 PROMPT_FILE="${1:?usage: codex-review.sh <prompt-file> [effort] [repo ...]}"
@@ -98,6 +101,8 @@ for a in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
   case "$a" in
     --dangerously-*|-s*|--sandbox|--sandbox=*)
       die "CODEX_EXTRA_ARGS may not change the sandbox (refused: $a)";;
+    -c*|--config|--config=*|-p*|--profile|--profile=*)
+      die "CODEX_EXTRA_ARGS may not override config or profiles (they can redefine the sandbox) (refused: $a)";;
     -o*|--output-last-message|--output-last-message=*|--output-schema|--output-schema=*|-C*|--cd|--cd=*|--add-dir|--add-dir=*)
       die "CODEX_EXTRA_ARGS may not set the answer file, schema, cwd or extra dirs — use the env knobs / repo args (refused: $a)";;
   esac
@@ -128,7 +133,11 @@ fi
 SCHEMA_ARGS=()
 if [[ -n "$SCHEMA_ABS" ]]; then SCHEMA_ARGS=( --output-schema "$SCHEMA_ABS" ); fi
 
-exec "$TIMEOUT_BIN" --kill-after=30s "${TIMEOUT}s" \
+# Not exec'd: on any failure the (pre-truncated) answer file is removed so a
+# caller can never mistake an empty file for a clean verdict; on success it
+# must be non-empty.
+rc=0
+"$TIMEOUT_BIN" --kill-after=30s "${TIMEOUT}s" \
   codex exec -m "$MODEL" -c model_reasoning_effort="$EFFORT" \
   -s read-only --skip-git-repo-check \
   ${CWD_ARGS[@]+"${CWD_ARGS[@]}"} \
@@ -136,4 +145,10 @@ exec "$TIMEOUT_BIN" --kill-after=30s "${TIMEOUT}s" \
   ${SCHEMA_ARGS[@]+"${SCHEMA_ARGS[@]}"} \
   -o "$ANSWER_ABS" \
   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
-  - < "$PROMPT_ABS"
+  - < "$PROMPT_ABS" || rc=$?
+if (( rc != 0 )); then
+  rm -f "$ANSWER_ABS"
+  echo "codex-review: codex exited $rc — no review happened; answer file removed" >&2
+  exit "$rc"
+fi
+[[ -s "$ANSWER_ABS" ]] || die "codex exited 0 but wrote no final answer to $ANSWER_ABS"
