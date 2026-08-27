@@ -160,4 +160,7 @@ if (( rc != 0 )); then
   echo "codex-review: codex exited $rc — no review happened; answer file removed" >&2
   exit "$rc"
 fi
-[[ -s "$ANSWER_ABS" ]] || die "codex exited 0 but wrote no final answer to $ANSWER_ABS"
+if [[ ! -s "$ANSWER_ABS" ]]; then
+  rm -f "$ANSWER_ABS"
+  die "codex exited 0 but wrote no final answer (answer file removed): $ANSWER_ABS"
+fi
