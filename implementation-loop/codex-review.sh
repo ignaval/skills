@@ -57,9 +57,9 @@
 #
 # Exit code is codex's (non-zero only on execution/auth/network/timeout
 # errors, NOT on "found issues" — findings are normal successful output).
-# On non-zero exit the answer file is REMOVED; exit 2 if codex exited 0 but
-# left it empty. So: a present, non-empty answer file always means a review
-# happened.
+# On ANY failure — preflight, codex non-zero, signal, or codex exiting 0
+# without an answer — the answer file is REMOVED. So: a present, non-empty
+# answer file always means a review happened.
 set -euo pipefail
 
 PROMPT_FILE="${1:?usage: codex-review.sh <prompt-file> [effort] [repo ...]}"
@@ -78,13 +78,41 @@ SCHEMA="${CODEX_OUTPUT_SCHEMA:-$HERE/findings.schema.json}"
 
 die() { echo "codex-review: $*" >&2; exit 2; }
 
+# Absolute paths — codex runs with its cwd set to the first repo.
+abspath() {
+  local d
+  d="$(cd -- "$(dirname -- "$1")" && pwd)" || die "cannot resolve path: $1"
+  echo "$d/$(basename -- "$1")"
+}
+
+# THE ANSWER-FILE INVARIANT: a present, non-empty answer file means a review
+# happened. So the file is claimed and cleared FIRST — before any fallible
+# preflight — and a trap removes it on every exit path; the trap is disarmed
+# only after a successful run wrote a non-empty answer.
+[[ -f "$PROMPT_FILE" ]] || die "prompt file not found: $PROMPT_FILE"
+PROMPT_ABS="$(abspath "$PROMPT_FILE")"
+ANSWER_FILE="${CODEX_ANSWER_FILE:-${PROMPT_FILE}.answer.json}"
+mkdir -p "$(dirname -- "$ANSWER_FILE")" || die "cannot create answer directory for: $ANSWER_FILE"
+ANSWER_ABS="$(abspath "$ANSWER_FILE")"
+SCHEMA_ABS=""
+if [[ "$SCHEMA" != none ]]; then SCHEMA_ABS="$(abspath "$SCHEMA")"; fi
+# Never let the answer file alias an input (-ef also catches symlink/hard-link
+# aliases; it is false for a missing file).
+if [[ "$ANSWER_ABS" == "$PROMPT_ABS" || "$ANSWER_ABS" -ef "$PROMPT_ABS" ]] \
+   || [[ -n "$SCHEMA_ABS" && ( "$ANSWER_ABS" == "$SCHEMA_ABS" || "$ANSWER_ABS" -ef "$SCHEMA_ABS" ) ]]; then
+  die "CODEX_ANSWER_FILE must not be the prompt or the schema: $ANSWER_ABS"
+fi
+: > "$ANSWER_ABS" || die "cannot write answer file: $ANSWER_ABS"
+trap 'rm -f "$ANSWER_ABS"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 command -v codex >/dev/null || die "codex CLI not found on PATH (npm install -g @openai/codex)"
 # GNU timeout: plain `timeout` on Linux, `gtimeout` from coreutils on macOS.
 if command -v timeout >/dev/null; then TIMEOUT_BIN=timeout
 elif command -v gtimeout >/dev/null; then TIMEOUT_BIN=gtimeout
 else die "GNU timeout not found (on macOS: brew install coreutils for gtimeout)"
 fi
-[[ -f "$PROMPT_FILE" ]] || die "prompt file not found: $PROMPT_FILE"
 case "$EFFORT" in high|medium|low) ;; *) die "effort must be high|medium|low (got: $EFFORT)";; esac
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "CODEX_TIMEOUT must be a positive integer number of seconds (got: $TIMEOUT)"
 if [[ "$SCHEMA" != none ]]; then
@@ -113,25 +141,6 @@ for a in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
   esac
 done
 
-# Absolute paths — codex runs with its cwd set to the first repo.
-abspath() {
-  local d
-  d="$(cd -- "$(dirname -- "$1")" && pwd)" || die "cannot resolve path: $1"
-  echo "$d/$(basename -- "$1")"
-}
-PROMPT_ABS="$(abspath "$PROMPT_FILE")"
-ANSWER_FILE="${CODEX_ANSWER_FILE:-${PROMPT_FILE}.answer.json}"
-mkdir -p "$(dirname "$ANSWER_FILE")"
-ANSWER_ABS="$(abspath "$ANSWER_FILE")"
-SCHEMA_ABS=""
-if [[ "$SCHEMA" != none ]]; then SCHEMA_ABS="$(abspath "$SCHEMA")"; fi
-# The answer file is truncated before codex runs — never let it alias an input.
-# (-ef also catches symlink/hard-link aliases; it is false for a missing file.)
-if [[ "$ANSWER_ABS" == "$PROMPT_ABS" || "$ANSWER_ABS" -ef "$PROMPT_ABS" ]] \
-   || [[ -n "$SCHEMA_ABS" && ( "$ANSWER_ABS" == "$SCHEMA_ABS" || "$ANSWER_ABS" -ef "$SCHEMA_ABS" ) ]]; then
-  die "CODEX_ANSWER_FILE must not be the prompt or the schema: $ANSWER_ABS"
-fi
-: > "$ANSWER_ABS" || die "cannot write answer file: $ANSWER_ABS"
 
 CWD_ARGS=()
 ADD_DIR_ARGS=()
@@ -142,9 +151,7 @@ fi
 SCHEMA_ARGS=()
 if [[ -n "$SCHEMA_ABS" ]]; then SCHEMA_ARGS=( --output-schema "$SCHEMA_ABS" ); fi
 
-# Not exec'd: on any failure the (pre-truncated) answer file is removed so a
-# caller can never mistake an empty file for a clean verdict; on success it
-# must be non-empty.
+# Not exec'd: the EXIT trap must still run after codex returns.
 rc=0
 "$TIMEOUT_BIN" --kill-after=30s "${TIMEOUT}s" \
   codex exec -m "$MODEL" -c model_reasoning_effort="$EFFORT" \
@@ -156,11 +163,8 @@ rc=0
   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
   - < "$PROMPT_ABS" || rc=$?
 if (( rc != 0 )); then
-  rm -f "$ANSWER_ABS"
   echo "codex-review: codex exited $rc — no review happened; answer file removed" >&2
-  exit "$rc"
+  exit "$rc"   # EXIT trap removes the answer file
 fi
-if [[ ! -s "$ANSWER_ABS" ]]; then
-  rm -f "$ANSWER_ABS"
-  die "codex exited 0 but wrote no final answer (answer file removed): $ANSWER_ABS"
-fi
+[[ -s "$ANSWER_ABS" ]] || die "codex exited 0 but wrote no final answer (answer file removed): $ANSWER_ABS"
+trap - EXIT    # success: keep the answer

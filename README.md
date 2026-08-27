@@ -144,10 +144,11 @@ OUTPUT: JSON matching the provided schema; an EMPTY findings list only if you fo
 PROMPT
 
 # 3. One read-only review pass; the verdict lands in the answer file
-CODEX_ANSWER_FILE=/tmp/review-1.answer.json \
-  ~/.claude/skills/implementation-loop/codex-review.sh /tmp/review.md medium "$REPO" > /tmp/review-1.log
-echo "exit=$?"                   # 0 = a review happened; then read the verdict
-cat /tmp/review-1.answer.json
+if CODEX_ANSWER_FILE=/tmp/review-1.answer.json \
+   ~/.claude/skills/implementation-loop/codex-review.sh /tmp/review.md medium "$REPO" > /tmp/review-1.log
+then cat /tmp/review-1.answer.json      # only a zero exit leaves an answer file behind
+else echo "review failed, see /tmp/review-1.log"
+fi
 ```
 
 - **`codex-review.sh <prompt-file> [effort] [repo ...]`** — one review pass
@@ -158,8 +159,8 @@ cat /tmp/review-1.answer.json
   as JSON constrained by `implementation-loop/findings.schema.json`
   (`{"findings":[{severity, location, problem, fix}]}`) through codex's
   `--output-schema`. **Check the exit code first:** non-zero (auth, network,
-  timeout = 124) means no review happened and the answer file is removed —
-  never read an answer without a zero exit. `CODEX_OUTPUT_SCHEMA`
+  timeout = 124, bad arguments) means no review happened and the answer
+  file is removed — never read an answer without a zero exit. `CODEX_OUTPUT_SCHEMA`
   swaps the schema or, as `none`, gives free text — for direct use only; the
   skills pin the bundled schema. The sandbox mode is hardcoded to read-only,
   and `CODEX_EXTRA_ARGS` refuses anything that could change it (including
