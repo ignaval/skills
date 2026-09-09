@@ -21,7 +21,7 @@
 #   codex-review.sh <prompt-file> [effort] [repo ...]
 #
 #   <prompt-file>  Path to the review prompt (markdown), piped to codex on stdin.
-#   [effort]       codex reasoning effort: high (default) | medium | low.
+#   [effort]       codex reasoning effort: high (default) | medium | low | xhigh | max.
 #                  Optional even when repos follow: a non-effort second
 #                  argument is treated as the first repo.
 #   [repo ...]     Repo paths the review covers. Each is validated to exist;
@@ -43,7 +43,7 @@
 #                     — pass a per-round path so rounds don't overwrite.
 #
 # Env overrides:
-#   CODEX_MODEL          codex model id   (default: gpt-5.6-sol)
+#   CODEX_MODEL          codex model id   (default: gpt-6-astra)
 #   CODEX_TIMEOUT        seconds per call (default: 3600; exit 124 on hit)
 #   CODEX_ANSWER_FILE    where the final answer goes (see above)
 #   CODEX_OUTPUT_SCHEMA  JSON Schema for the final answer; "none" disables
@@ -65,14 +65,14 @@ set -euo pipefail
 PROMPT_FILE="${1:?usage: codex-review.sh <prompt-file> [effort] [repo ...]}"
 # effort is optional: when $2 is not an effort level, treat it as the first repo.
 case "${2:-}" in
-  high|medium|low) EFFORT="$2"; REPOS=( "${@:3}" ) ;;
+  high|medium|low|xhigh|max) EFFORT="$2"; REPOS=( "${@:3}" ) ;;
   *)               EFFORT="high"; REPOS=( "${@:2}" ) ;;
 esac
 
 # Not symlink-resolved (no portable readlink -f on bash 3.2/macOS): keep
 # findings.schema.json beside this script; symlink the DIRECTORY, not the file.
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-MODEL="${CODEX_MODEL:-gpt-5.6-sol}"
+MODEL="${CODEX_MODEL:-gpt-6-astra}"
 TIMEOUT="${CODEX_TIMEOUT:-3600}"
 SCHEMA="${CODEX_OUTPUT_SCHEMA:-$HERE/findings.schema.json}"
 
@@ -113,7 +113,7 @@ if command -v timeout >/dev/null; then TIMEOUT_BIN=timeout
 elif command -v gtimeout >/dev/null; then TIMEOUT_BIN=gtimeout
 else die "GNU timeout not found (on macOS: brew install coreutils for gtimeout)"
 fi
-case "$EFFORT" in high|medium|low) ;; *) die "effort must be high|medium|low (got: $EFFORT)";; esac
+case "$EFFORT" in high|medium|low|xhigh|max) ;; *) die "effort must be high|medium|low|xhigh|max (got: $EFFORT)";; esac
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "CODEX_TIMEOUT must be a positive integer number of seconds (got: $TIMEOUT)"
 if [[ "$SCHEMA" != none ]]; then
   [[ -f "$SCHEMA" ]] || die "output schema not found: $SCHEMA (set CODEX_OUTPUT_SCHEMA=none for free text)"

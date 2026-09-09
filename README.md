@@ -91,7 +91,7 @@ committed during the conversation):
 |---|---|---|
 | `low` / `medium` / `high` | first word of the arguments | Intensity profile, default `high` — see below |
 | `SUBAGENT_MODEL=<model>` | in the arguments | Model for implementation / fix / audit subagents (default `opus`) |
-| `CODEX_MODEL=<id>` | shell env before starting Claude Code | Reviewer model (default `gpt-5.6-sol`) |
+| `CODEX_MODEL=<id>` | shell env before starting Claude Code | Reviewer model (default `gpt-6-astra`) |
 | `CODEX_TIMEOUT=<seconds>` | shell env | Per-round cap (default 3600) |
 | `CODEX_EXTRA_ARGS="..."` | shell env | Extra `codex exec` flags, e.g. `--ephemeral` |
 
