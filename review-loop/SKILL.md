@@ -25,10 +25,13 @@ on input. The user sees the final report.
   are advice; every one is verified against the code before it is fixed, and
   every non-fix gets a written reason in the ledger. Nothing is silently
   ignored.
-- **Fix / audit subagents** run via the `Agent` tool on a strong cheaper model
-  (`model: "opus"`); honor a user-supplied `SUBAGENT_MODEL=...`.
-- **The codex reviewer** uses the helper's default model (`CODEX_MODEL`), at
-  **`medium` effort until clean, then `high`**.
+- **Fix / audit subagents** run via the `Agent` tool as
+  `subagent_type: "loop-worker"` (Opus 5.5 at `high` effort, from
+  `~/.claude/agents/loop-worker.md`; if that type is missing, use
+  `general-purpose` with `model: "opus"`); honor a user-supplied
+  `SUBAGENT_MODEL=...` as the `model` override.
+- **The codex reviewer** uses the helper's default model (`CODEX_MODEL`;
+  default `gpt-6.1-sol`), at **`medium` effort until clean, then `xhigh`**.
 
 ## Intensity profiles (optional argument — default `high`)
 
@@ -37,8 +40,8 @@ noisier findings that waste orchestrator judgment).
 
 | Profile | Phase-1 ladder | Phase 2 (sweep) | Phase 3 (verification) |
 |---|---|---|---|
-| `high` (default) | `medium` tier → `high` tier | yes* | up to 5 rounds at `high` |
-| `medium` | `medium` tier only | yes* | up to 2 rounds at `high` |
+| `high` (default) | `medium` tier → `xhigh` tier | yes* | up to 5 rounds at `xhigh` |
+| `medium` | `medium` tier only | yes* | up to 2 rounds at `xhigh` |
 | `low` | one `medium` round + fixes | skip | 1 round at `medium` |
 
 \* Skippable only when the whole ladder produced **zero valid findings**;
@@ -80,9 +83,9 @@ one valid finding means its analogous sites were never audited: sweep.
    for; start `$SCRATCH/ledger.md`, seeded with any deliberate design
    decisions already made in the session.
 
-## Phase 1 — Per-finding ladder (medium tier, then high tier)
+## Phase 1 — Per-finding ladder (medium tier, then xhigh tier)
 
-Each round (`medium` until converged, then restart at `high`, trimmed by the
+Each round (`medium` until converged, then restart at `xhigh`, trimmed by the
 profile):
 
 1. **Diffs:** per repo, `git diff BASE..HEAD` followed by `~/.claude/skills/implementation-loop/collect-diff.sh <repo>`,
@@ -92,7 +95,7 @@ profile):
 2. **Prompt:** `$SCRATCH/review-prompt.md` from the template — stable across
    rounds, everything by path.
 3. **Run:**
-   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/round-<tier>-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/review-prompt.md" <medium|high> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/round-<tier>-N.md"`
+   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/round-<tier>-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/review-prompt.md" <medium|xhigh> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/round-<tier>-N.md"`
 4. **Judge** from the answer file only. `findings: []` (or all findings already
    ledgered) → tier converged. Otherwise verify each finding against the code:
    valid → fix (yourself or a reviewed subagent), re-run that repo's gates;
@@ -107,7 +110,7 @@ profile):
 
 **Phase transition:** after **2 consecutive rounds with no NEW-CLASS finding**,
 stop the ladder even mid-tier (this **overrides** tier progression — a skipped
-high tier is replaced by the sweep plus Phase 3 at the profile's effort). Backstop: force it at **25
+xhigh tier is replaced by the sweep plus Phase 3 at the profile's effort). Backstop: force it at **25
 rounds in one tier**.
 
 ## Phase 2 — Discipline sweep

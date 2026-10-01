@@ -21,7 +21,7 @@
 #   codex-review.sh <prompt-file> [effort] [repo ...]
 #
 #   <prompt-file>  Path to the review prompt (markdown), piped to codex on stdin.
-#   [effort]       codex reasoning effort: high (default) | medium | low | xhigh | max.
+#   [effort]       codex reasoning effort: xhigh (default) | high | medium | low | max.
 #                  Optional even when repos follow: a non-effort second
 #                  argument is treated as the first repo.
 #   [repo ...]     Repo paths the review covers. Each is validated to exist;
@@ -43,7 +43,7 @@
 #                     — pass a per-round path so rounds don't overwrite.
 #
 # Env overrides:
-#   CODEX_MODEL          codex model id   (default: gpt-6-astra)
+#   CODEX_MODEL          codex model id   (default: gpt-6.1-sol)
 #   CODEX_TIMEOUT        seconds per call (default: 3600; exit 124 on hit)
 #   CODEX_ANSWER_FILE    where the final answer goes (see above)
 #   CODEX_OUTPUT_SCHEMA  JSON Schema for the final answer; "none" disables
@@ -66,13 +66,13 @@ PROMPT_FILE="${1:?usage: codex-review.sh <prompt-file> [effort] [repo ...]}"
 # effort is optional: when $2 is not an effort level, treat it as the first repo.
 case "${2:-}" in
   high|medium|low|xhigh|max) EFFORT="$2"; REPOS=( "${@:3}" ) ;;
-  *)               EFFORT="high"; REPOS=( "${@:2}" ) ;;
+  *)               EFFORT="xhigh"; REPOS=( "${@:2}" ) ;;
 esac
 
 # Not symlink-resolved (no portable readlink -f on bash 3.2/macOS): keep
 # findings.schema.json beside this script; symlink the DIRECTORY, not the file.
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-MODEL="${CODEX_MODEL:-gpt-6-astra}"
+MODEL="${CODEX_MODEL:-gpt-6.1-sol}"
 TIMEOUT="${CODEX_TIMEOUT:-3600}"
 SCHEMA="${CODEX_OUTPUT_SCHEMA:-$HERE/findings.schema.json}"
 

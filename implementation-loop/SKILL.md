@@ -32,13 +32,17 @@ follow along; they see the **final report** only.
   audit-subagent report is advice. Nothing is fixed or dismissed without you
   verifying it against the actual code, and every non-fix gets a written
   reason in the ledger. Silently ignoring a finding is not allowed.
-- **Implementation / fix / audit subagents** run via the `Agent` tool on a
-  strong cheaper model (`model: "opus"`; `"haiku"` only for trivial mechanical
-  edits). Honor a user-supplied `SUBAGENT_MODEL=...` argument.
+- **Implementation / fix / audit subagents** run via the `Agent` tool as
+  `subagent_type: "loop-worker"` (Opus 5.5 at `high` effort, from
+  `~/.claude/agents/loop-worker.md`; if that type is missing, use
+  `general-purpose` with `model: "opus"`). Pass `model: "haiku"` only for
+  trivial mechanical edits. Honor a user-supplied `SUBAGENT_MODEL=...`
+  argument as the `model` override.
 - **The codex reviewer** uses the helper's default model (`CODEX_MODEL` to
-  override), at **`medium` effort until clean, then `high`** — the medium
-  tier clears the cheap findings before the expensive rounds. A high round
-  costs roughly 200–450k codex tokens.
+  override; default `gpt-6.1-sol`), at **`medium` effort until clean, then
+  `xhigh`** — the medium tier clears the cheap findings before the expensive
+  rounds. An `xhigh` round costs more than the 200–450k codex tokens a
+  `high` round used to.
 
 ## Intensity profiles (optional argument — default `high`)
 
@@ -48,8 +52,8 @@ implementers buy extra review rounds).
 
 | Profile | Phase 2 | Phase-4 ladder | Sweep | Verification cap |
 |---|---|---|---|---|
-| `high` (default) | as written | `medium` tier → `high` tier | yes* | 5 rounds at `high` |
-| `medium` | as written | `medium` tier only | yes* | 2 rounds at `high` |
+| `high` (default) | as written | `medium` tier → `xhigh` tier | yes* | 5 rounds at `xhigh` |
+| `medium` | as written | `medium` tier only | yes* | 2 rounds at `xhigh` |
 | `low` | skip | one `medium` round + fixes | no | 1 round at `medium` |
 
 \* Skippable only when the whole ladder produced **zero valid findings** —
@@ -65,7 +69,7 @@ read-only`): it reads repos straight from disk and cannot write. Always go
 through the two colocated helpers (prerequisites in the repo README):
 
 - **`~/.claude/skills/implementation-loop/codex-review.sh <prompt-file> [effort] [repo ...]`**
-  One codex pass. `effort` = `high | medium | low`. **Pass every repo in
+  One codex pass. `effort` = `xhigh | high | medium | low`. **Pass every repo in
   play** (the first becomes codex's cwd, the rest are `--add-dir`ed) and
   reference repos, diffs and the plan by **absolute path** in the prompt.
   Two outputs:
@@ -148,7 +152,7 @@ its own fixes. So: two effort tiers, a transition rule that stops the ladder
 when it stops teaching, a sweep that closes classes wholesale, and capped
 verification that proves closure.
 
-**Tier order:** `medium` until converged, then restart at `high` (trimmed by
+**Tier order:** `medium` until converged, then restart at `xhigh` (trimmed by
 the profile table). Each round, either tier:
 
 1. **Diffs:** for every repo, `~/.claude/skills/implementation-loop/collect-diff.sh <repo> > "$SCRATCH/diff-<slug>.patch"`.
@@ -160,10 +164,10 @@ the profile table). Each round, either tier:
    it stable across rounds: reference `plan.md`, the diffs and `ledger.md` by
    path, never inline them.
 3. **Run:**
-   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/impl-review-round-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/impl-review-prompt.md" <medium|high> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/impl-review-round-N.md"`
+   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/impl-review-round-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/impl-review-prompt.md" <medium|xhigh> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/impl-review-round-N.md"`
    (`pipefail` so `tee` cannot mask a codex failure).
 4. **Judge** from the answer file only. `findings: []` → tier converged (medium
-   → start high; high → ladder ends; sweep unless the footnote applies).
+   → start xhigh; xhigh → ladder ends; sweep unless the footnote applies).
    Otherwise, per finding, **verify against the code**: valid → fix (yourself
    or a reviewed subagent), re-run that repo's gates; invalid / intentional →
    append to `ledger.md` with a one-line reason, leave the code alone. A round
@@ -177,8 +181,8 @@ the profile table). Each round, either tier:
 
 **Phase transition.** After **2 consecutive rounds with no NEW-CLASS finding**
 (severity is a noisy signal — highs keep appearing in the tail), stop the
-ladder even mid-tier — this **overrides** tier progression; a skipped high
-tier is replaced by the sweep plus high-effort verification. Backstop: force
+ladder even mid-tier — this **overrides** tier progression; a skipped xhigh
+tier is replaced by the sweep plus xhigh-effort verification. Backstop: force
 it at **25 rounds in one tier**.
 
 **Sweep.** Distill this run's findings into **named rules** (identity-gating,

@@ -19,7 +19,7 @@ Both skills came out of long real-world campaigns. The design lessons baked in:
 - **A dismissed/residual ledger.** An adversarial reviewer can re-derive
   residual race windows forever; feeding every dismissal (with a written
   reason) back into every prompt is what makes "clean" reachable at all.
-- **Two effort tiers.** Medium-effort rounds until clean, then high-effort —
+- **Two effort tiers.** Medium-effort rounds until clean, then xhigh-effort —
   the cheap tier clears the cheap findings before the expensive rounds start.
 - **The orchestrator is the arbiter.** Codex findings and audit-subagent
   reports are advice; nothing is fixed or dismissed without the orchestrating
@@ -47,10 +47,13 @@ No Docker, no image builds, no daemons.
 git clone https://github.com/ignaval/skills.git
 cd skills
 mkdir -p ~/.claude/skills && cp -r implementation-loop review-loop ~/.claude/skills/
+mkdir -p ~/.claude/agents && cp agents/loop-worker.md ~/.claude/agents/
 ```
 
-Install **both** directories: `review-loop` reuses `implementation-loop`'s
-scripts and schema rather than shipping copies. The SKILL.md files reference
+Install **both** skill directories: `review-loop` reuses `implementation-loop`'s
+scripts and schema rather than shipping copies. `agents/loop-worker.md` is the
+subagent both skills dispatch for implementation, fixes and audits (Opus 5.5
+at high effort); without it they fall back to `general-purpose` on `opus`. The SKILL.md files reference
 them at `~/.claude/skills/implementation-loop/`; if you install elsewhere,
 update those paths.
 
@@ -90,8 +93,8 @@ committed during the conversation):
 | Knob | Where | Effect |
 |---|---|---|
 | `low` / `medium` / `high` | first word of the arguments | Intensity profile, default `high` — see below |
-| `SUBAGENT_MODEL=<model>` | in the arguments | Model for implementation / fix / audit subagents (default `opus`) |
-| `CODEX_MODEL=<id>` | shell env before starting Claude Code | Reviewer model (default `gpt-6-astra`) |
+| `SUBAGENT_MODEL=<model>` | in the arguments | Model override for implementation / fix / audit subagents (default: the `loop-worker` agent, Opus 5.5 at high effort) |
+| `CODEX_MODEL=<id>` | shell env before starting Claude Code | Reviewer model (default `gpt-6.1-sol`) |
 | `CODEX_TIMEOUT=<seconds>` | shell env | Per-round cap (default 3600) |
 | `CODEX_EXTRA_ARGS="..."` | shell env | Extra `codex exec` flags, e.g. `--ephemeral` |
 
@@ -112,8 +115,8 @@ dir — `/tmp` on Linux, `$TMPDIR` on macOS) the report points at.
 
 | Profile | Review ladder | Discipline sweep | Verification rounds | When |
 |---|---|---|---|---|
-| `high` (default) | medium-effort rounds until clean, then high-effort | yes* | up to 5 at high | money paths, migrations, cross-repo contracts |
-| `medium` | medium-effort rounds only | yes* | up to 2 at high | ordinary features |
+| `high` (default) | medium-effort rounds until clean, then xhigh-effort | yes* | up to 5 at xhigh | money paths, migrations, cross-repo contracts |
+| `medium` | medium-effort rounds only | yes* | up to 2 at xhigh | ordinary features |
 | `low` | one medium-effort round + fixes | no | 1 at medium | small changes, quick sanity pass |
 
 \* Skipped only when the whole review ladder produced zero valid findings
