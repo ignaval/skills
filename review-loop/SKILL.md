@@ -102,7 +102,7 @@ one valid finding means its analogous sites were never audited: sweep.
 Each round (`medium` until converged, then restart at `xhigh`, trimmed by the
 profile; `<tier>` is `medium` or `xhigh`, and `N` restarts at 1 in each tier):
 
-1. **Diffs:** per repo, `git diff --no-color BASE..HEAD` followed by `~/.claude/skills/implementation-loop/collect-diff.sh <repo>`,
+1. **Diffs:** per repo, `git diff --no-color --no-ext-diff --no-textconv --ignore-submodules=none BASE..HEAD` followed by `~/.claude/skills/implementation-loop/collect-diff.sh <repo>`,
    concatenated into `$SCRATCH/diff-<slug>.patch`. Always both — fixes change
    the diff, and fixes committed per round would otherwise vanish. This is the
    only place diffs are built; a fix always leads back here.
@@ -184,8 +184,8 @@ Review for: correctness bugs, missing pieces, broken error handling, security
 holes, data-integrity problems, race conditions, edge cases, regressions, and
 anything that would fail the repo's own tests. Point to exact file:line.
 Prefer real defects over style nits.
-Report EVERY defect you find, not only the most important: each round costs
-the same whether it reports one finding or ten.
+Report EVERY defect you find, not only the most important: each one left out
+costs another full fix-and-review round.
 The sandbox is read-only and the repo's tests/lint/typecheck already passed
 before this round: do not run builds or test suites (they fail on writes
 here); read the code.

@@ -72,6 +72,9 @@
 # without an answer — the answer file is REMOVED. So: a present, non-empty
 # answer file always means a review happened.
 set -euo pipefail
+# CDPATH would make a relative `cd` land in another tree, and print that
+# path into captured output.
+unset CDPATH
 
 PROMPT_FILE="${1:?usage: codex-review.sh <prompt-file> [effort] [repo ...]}"
 # effort is optional: when $2 is not an effort level, treat it as the first repo.

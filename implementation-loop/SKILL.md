@@ -172,7 +172,7 @@ the profile table). Each round, either tier (`<tier>` is `medium` or `xhigh`;
    If the user asked for commits along the way, prepend the committed span
    since the Phase-0 HEAD (`git diff <phase-0 HEAD>..HEAD`; git's empty-tree
    hash, `git hash-object -t tree /dev/null`, for a repo that had no commits;
-   add `--no-color`) — `collect-diff.sh` alone would drop it. This is the only
+   add `--no-color --no-ext-diff --no-textconv --ignore-submodules=none`) — `collect-diff.sh` alone would drop it. This is the only
    place diffs are built; a fix always leads back here.
 2. **Prompt:** write `$SCRATCH/impl-review-prompt.md` from the template. Keep
    it stable across rounds: reference `plan.md`, the diffs and `ledger.md` by
@@ -263,7 +263,7 @@ invalid assumptions about how the current code works, missing steps, bad
 ordering or dependency mistakes, unhandled edge cases and failure modes,
 migration/backfill gaps, cross-repo contract mismatches. Verify claims against
 the actual code on disk. Report EVERY real problem you find, not only the most
-important: each round costs the same whether it reports one finding or ten.
+important: each one left out comes back later as rework in the code.
 Skip nitpicks.
 The sandbox is read-only and nothing is built yet: do not run builds or test
 suites; read the code.
@@ -301,8 +301,8 @@ Review for: correctness bugs, deviations from the plan, missing pieces, broken
 or missing error handling, security holes, data-integrity/migration problems,
 edge cases, regressions, and anything that would fail the repo's own tests.
 Point to exact file:line. Prefer real defects over style nits.
-Report EVERY defect you find, not only the most important: each round costs
-the same whether it reports one finding or ten.
+Report EVERY defect you find, not only the most important: each one left out
+costs another full fix-and-review round.
 The sandbox is read-only and the repo's tests/lint/typecheck already passed
 before this round: do not run builds or test suites (they fail on writes
 here); read the code.

@@ -2,7 +2,8 @@
 # collect-diff.sh — print a comprehensive, review-ready diff for ONE repo.
 #
 # Emits, with a header identifying the repo/branch/HEAD:
-#   1. `git status --short`         (orientation)
+#   1. `git status --short`         (orientation; every untracked file listed,
+#                                    whatever status.showUntrackedFiles says)
 #   2. `git diff --cached HEAD`     (STAGED changes vs the last commit — vs the
 #                                    empty tree when there are no commits yet)
 #   3. `git diff`                   (UNSTAGED changes vs the index). Two
@@ -25,6 +26,9 @@
 # Warns on stderr if the emitted diff is very large (may not fit a codex
 # context — consider reviewing repos in separate rounds).
 set -euo pipefail
+# CDPATH would make a relative `cd` land in another tree, and print that
+# path into captured output.
+unset CDPATH
 
 # No opportunistic index refresh, no repo-configured external diff/textconv
 # drivers. (Clean/process filters still run — see the caveat above.)
@@ -73,7 +77,9 @@ emit() {
   echo "############################################################"
   echo
   echo "===== git status --short ====="
-  git -c color.ui=false -c color.status=false status --short
+  # --untracked-files=all: the scan below lists every untracked file, and a
+  # caller reads this section to tell a dirty baseline from a clean one.
+  git -c color.ui=false -c color.status=false status --short --untracked-files=all --ignore-submodules=none
   echo
   echo "===== staged changes vs HEAD (git diff --cached HEAD) ====="
   if [[ "$has_head" == 0 ]]; then
@@ -81,10 +87,12 @@ emit() {
   fi
   # No || true: a failing diff must abort loudly — an incomplete patch that
   # gets reviewed as comprehensive is worse than a hard error.
-  git diff --cached --no-color --no-ext-diff --no-textconv "$base"
+  # `--` after the revision: a worktree file named HEAD makes it ambiguous.
+  # --ignore-submodules=none: diff.ignoreSubmodules would hide gitlink updates.
+  git diff --cached --no-color --no-ext-diff --no-textconv --ignore-submodules=none "$base" --
   echo
   echo "===== unstaged changes vs the index (git diff) ====="
-  git diff --no-color --no-ext-diff --no-textconv
+  git diff --no-color --no-ext-diff --no-textconv --ignore-submodules=none --
   echo
   echo "===== new untracked files (full contents as unified diff) ====="
   local f rc arg
