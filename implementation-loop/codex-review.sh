@@ -33,9 +33,12 @@
 #                  the prompt.
 #
 # Outputs:
-#   stdout            codex's full session stream (shell calls, reasoning,
-#                     an ECHO OF THE PROMPT, token accounting). Keep it on
-#                     disk for humans; do NOT parse it.
+#   stderr            codex's full session stream (shell calls, reasoning,
+#                     an ECHO OF THE PROMPT, token accounting), plus this
+#                     script's own errors. Keep it on disk for humans; do NOT
+#                     parse it.
+#   stdout            codex's final message, repeated. Redirect both streams
+#                     to the same log (`> log 2>&1`).
 #   $CODEX_ANSWER_FILE
 #                     codex's FINAL ANSWER only, written via `-o`. This is
 #                     the file a caller reads. It is JSON matching
@@ -45,7 +48,7 @@
 #                     — pass a per-round path so rounds don't overwrite.
 #
 # Env overrides:
-#   CODEX_MODEL          codex model id   (default: gpt-6.1-sol)
+#   CODEX_MODEL          codex model id   (default: gpt-6.2-sol)
 #   CODEX_TIMEOUT        seconds per call (default: 3600; exit 124 on hit)
 #   CODEX_ANSWER_FILE    where the final answer goes (see above)
 #   CODEX_OUTPUT_SCHEMA  JSON Schema for the final answer; "none" disables
@@ -80,7 +83,7 @@ esac
 # Not symlink-resolved (no portable readlink -f on bash 3.2/macOS): keep
 # findings.schema.json beside this script; symlink the DIRECTORY, not the file.
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-MODEL="${CODEX_MODEL:-gpt-6.1-sol}"
+MODEL="${CODEX_MODEL:-gpt-6.2-sol}"
 TIMEOUT="${CODEX_TIMEOUT:-3600}"
 SCHEMA="${CODEX_OUTPUT_SCHEMA:-$HERE/findings.schema.json}"
 

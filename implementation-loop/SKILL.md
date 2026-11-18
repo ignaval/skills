@@ -40,7 +40,7 @@ follow along; they see the **final report** only.
   argument as the `model` override (an `Agent` alias: `opus`, `sonnet`,
   `haiku` or `fable`).
 - **The codex reviewer** uses the helper's default model (`CODEX_MODEL` to
-  override; default `gpt-6.1-sol`), at **`medium` effort until clean, then
+  override; default `gpt-6.2-sol`), at **`medium` effort until clean, then
   `xhigh`** — the medium tier clears the cheap findings before the expensive
   rounds. An `xhigh` verification round has run about 200–230k codex tokens
   and 30–45 minutes.
@@ -74,8 +74,9 @@ through the two colocated helpers (prerequisites in the repo README):
   play** (the first becomes codex's cwd, the rest are `--add-dir`ed) and
   reference repos, diffs and the plan by **absolute path** in the prompt.
   Two outputs:
-  - **stdout** — the full session stream (shell calls, an echo of your prompt,
-    token counts). Redirect it to a transcript file for humans. **Never read
+  - **stderr + stdout** — the full session stream (on stderr: shell calls, an
+    echo of your prompt, token counts) and the final message (stdout).
+    Redirect both to a transcript file for humans (`> file 2>&1`). **Never read
     or parse it**; never `tee` it, which pulls megabytes into your context.
   - **`$CODEX_ANSWER_FILE`** — codex's **final answer only**, as JSON matching
     `findings.schema.json`: `{"findings":[{severity,location,problem,fix}...]}`.
@@ -85,8 +86,8 @@ through the two colocated helpers (prerequisites in the repo README):
   retry once, then stop the loop and report the error state. Never count a
   failed round as converged.
 - **`~/.claude/skills/implementation-loop/collect-diff.sh <repo-path>`**
-  Comprehensive, binary-safe, read-only review diff for one repo (tracked
-  changes vs HEAD + new untracked files). Warns on stderr when too large for
+  Comprehensive, binary-safe, read-only review diff for one repo (staged
+  changes vs HEAD, unstaged changes vs the index, new untracked files). Warns on stderr when too large for
   one round.
 
 **Running a round.** Shell variables do not persist between Bash tool calls:

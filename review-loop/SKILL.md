@@ -32,7 +32,7 @@ on input. The user sees the final report.
   `SUBAGENT_MODEL=...` as the `model` override (an `Agent` alias: `opus`,
   `sonnet`, `haiku` or `fable`).
 - **The codex reviewer** uses the helper's default model (`CODEX_MODEL`;
-  default `gpt-6.1-sol`), at **`medium` effort until clean, then `xhigh`**.
+  default `gpt-6.2-sol`), at **`medium` effort until clean, then `xhigh`**.
 
 ## Intensity profiles (optional argument — default `high`)
 
@@ -53,8 +53,9 @@ one valid finding means its analogous sites were never audited: sweep.
 - **`~/.claude/skills/implementation-loop/codex-review.sh <prompt-file> [effort] [repo ...]`**
   One codex pass on the host under codex's read-only sandbox. Pass every repo
   (first = cwd, rest `--add-dir`ed); reference repos, diffs and the ledger by
-  **absolute path** in the prompt. **stdout** is the full session stream —
-  redirect it to a transcript file for humans; never read, parse or `tee` it
+  **absolute path** in the prompt. **stderr** carries the full session stream
+  (stdout the final message) — redirect both (`> file 2>&1`) to a transcript
+  file for humans; never read, parse or `tee` it
   (that pulls megabytes into your context). **`$CODEX_ANSWER_FILE`** holds codex's
   final answer only, as JSON `{"findings":[{severity,location,problem,fix}...]}`
   — **an empty list is the convergence signal**; judge every round from this
@@ -62,7 +63,7 @@ one valid finding means its analogous sites were never audited: sweep.
   timeout = 124) is a failed round, not a finding: retry once, then stop and
   report.
 - **`~/.claude/skills/implementation-loop/collect-diff.sh <repo-path>`** — the
-  working-tree diff (tracked vs HEAD + untracked), binary-safe, read-only.
+  working-tree diff (staged vs HEAD, unstaged vs the index, untracked), binary-safe, read-only.
 - **Running a round:** shell variables do not persist between Bash tool
   calls, so write `$SCRATCH`, the answer and transcript paths and every repo
   as **literal absolute paths** in each command. A round can take up to

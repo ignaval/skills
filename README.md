@@ -61,7 +61,7 @@ Sanity-check the helper once (the answer lands next to the prompt):
 
 ```bash
 echo "Read README.md in the current directory. Report zero findings." > /tmp/hello.md
-~/.claude/skills/implementation-loop/codex-review.sh /tmp/hello.md low "$PWD" > /tmp/hello.log
+~/.claude/skills/implementation-loop/codex-review.sh /tmp/hello.md low "$PWD" > /tmp/hello.log 2>&1
 cat /tmp/hello.md.answer.json     # -> {"findings":[]}
 ```
 
@@ -94,7 +94,7 @@ committed during the conversation):
 |---|---|---|
 | `low` / `medium` / `high` | first word of the arguments | Intensity profile, default `high` — see below |
 | `SUBAGENT_MODEL=<alias>` | in the arguments | Model override for implementation / fix / audit subagents: an `Agent` tool alias (`opus`, `sonnet`, `haiku`, `fable`), not a full model ID (default: the `loop-worker` agent, Opus 5.5 at high effort) |
-| `CODEX_MODEL=<id>` | shell env before starting Claude Code | Reviewer model (default `gpt-6.1-sol`) |
+| `CODEX_MODEL=<id>` | shell env before starting Claude Code | Reviewer model (default `gpt-6.2-sol`) |
 | `CODEX_TIMEOUT=<seconds>` | shell env | Per-round cap (default 3600) |
 | `CODEX_SERVICE_TIER=<tier>` | shell env | Codex service tier: `fast`, `flex` or `default` (unset: your codex config) |
 | `CODEX_EXTRA_ARGS="..."` | shell env | Extra `codex exec` flags, allowlisted: `--ephemeral`, `--ignore-user-config`, `--strict-config`, `--json`, `--color=<always\|never\|auto>` |
@@ -136,7 +136,7 @@ You do not need Claude Code to use the reviewer:
 ```bash
 REPO="$HOME/code/api"          # the repo to review (absolute path)
 
-# 1. Build a review diff (tracked changes vs HEAD + new files)
+# 1. Build a review diff (staged + unstaged changes + new files)
 ~/.claude/skills/implementation-loop/collect-diff.sh "$REPO" > /tmp/diff-api.patch
 
 # 2. Write a prompt that points at it by absolute path
@@ -149,7 +149,7 @@ PROMPT
 
 # 3. One read-only review pass; the verdict lands in the answer file
 if CODEX_ANSWER_FILE=/tmp/review-1.answer.json \
-   ~/.claude/skills/implementation-loop/codex-review.sh /tmp/review.md medium "$REPO" > /tmp/review-1.log
+   ~/.claude/skills/implementation-loop/codex-review.sh /tmp/review.md medium "$REPO" > /tmp/review-1.log 2>&1
 then cat /tmp/review-1.answer.json      # only a zero exit leaves an answer file behind
 else echo "review failed, see /tmp/review-1.log"
 fi
@@ -158,7 +158,8 @@ fi
 - **`codex-review.sh <prompt-file> [effort] [repo ...]`** — one review pass
   under `codex exec -s read-only`. The first repo is codex's working
   directory (`-C`), the rest are granted with `--add-dir`. The session
-  stream goes to stdout (keep it for humans, never parse it); the **final
+  stream goes to stderr and the final message to stdout (log both, keep
+  them for humans, never parse them); the **final
   answer** goes to `$CODEX_ANSWER_FILE` (default `<prompt-file>.answer.json`)
   as JSON constrained by `implementation-loop/findings.schema.json`
   (`{"findings":[{severity, location, problem, fix}]}`) through codex's
@@ -173,8 +174,9 @@ fi
   codex before the script exits, so an interrupted round leaves no answer
   file and nothing running.
 - **`collect-diff.sh <repo-path>`** — comprehensive, binary-safe, read-only
-  review diff for one repo (tracked changes vs HEAD, or vs the empty tree
-  before the first commit, plus new untracked files, never colored), with a
+  review diff for one repo (staged changes vs HEAD, or vs the empty tree
+  before the first commit; unstaged changes vs the index; new untracked
+  files; never colored), with a
   loud warning when it is too large for one round.
 
 ## Security note

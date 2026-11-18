@@ -3,11 +3,14 @@
 #
 # Emits, with a header identifying the repo/branch/HEAD:
 #   1. `git status --short`         (orientation)
-#   2. `git diff HEAD`              (all tracked changes vs last commit,
-#                                    staged AND unstaged — no index mutation;
-#                                    vs the empty tree when there are no
-#                                    commits yet, so staged files still show)
-#   3. full contents of each new untracked file, rendered as a unified diff via
+#   2. `git diff --cached HEAD`     (STAGED changes vs the last commit — vs the
+#                                    empty tree when there are no commits yet)
+#   3. `git diff`                   (UNSTAGED changes vs the index). Two
+#                                    sections, not one `git diff HEAD`: that
+#                                    compares the worktree with HEAD and hides a
+#                                    staged change whose worktree copy was put
+#                                    back — the next commit would still carry it.
+#   4. full contents of each new untracked file, rendered as a unified diff via
 #      `git diff --no-index` so BINARY files show "Binary files differ" instead
 #      of dumping bytes into the review.
 #
@@ -72,16 +75,19 @@ emit() {
   echo "===== git status --short ====="
   git -c color.ui=false -c color.status=false status --short
   echo
-  echo "===== tracked changes vs HEAD (git diff HEAD) ====="
+  echo "===== staged changes vs HEAD (git diff --cached HEAD) ====="
   if [[ "$has_head" == 0 ]]; then
     echo "(repo has no commits yet — staged files are diffed against the empty tree)"
   fi
   # No || true: a failing diff must abort loudly — an incomplete patch that
   # gets reviewed as comprehensive is worse than a hard error.
-  git diff --no-color --no-ext-diff --no-textconv "$base"
+  git diff --cached --no-color --no-ext-diff --no-textconv "$base"
+  echo
+  echo "===== unstaged changes vs the index (git diff) ====="
+  git diff --no-color --no-ext-diff --no-textconv
   echo
   echo "===== new untracked files (full contents as unified diff) ====="
-  local f rc
+  local f rc arg
   # Standalone checked command into a file: inside `$( )` or a process
   # substitution, a git failure would slip past `set -e` and silently yield an
   # incomplete "no untracked files" patch. NUL-delimited so filenames with
@@ -107,13 +113,22 @@ emit() {
         continue
       fi
       # --no-index against /dev/null renders the whole file as additions and is
-      # binary-safe. It exits 1 when files differ (always true here); anything
-      # >1 is a real error and must not be silently swallowed.
-      rc=0; git diff --no-color --no-ext-diff --no-textconv --no-index -- /dev/null "$f" || rc=$?
-      if (( rc > 1 )); then
+      # binary-safe. It exits 1 when files differ (always true here) — and ALSO
+      # when it cannot read the file (one deleted since the scan), so its
+      # stderr decides: an `error:`/`fatal:` line is a failure, never a patch.
+      # A file literally named `-` is stdin to git even after `--`, which would
+      # diff (and swallow) the rest of the NUL list: pass it as `./-`, with
+      # stdin closed.
+      arg="$f"; [[ "$arg" == - ]] && arg=./-
+      rc=0
+      git diff --no-color --no-ext-diff --no-textconv --no-index -- /dev/null "$arg" \
+        < /dev/null 2> "$diff_err" || rc=$?
+      if (( rc > 1 )) || grep -qE '^(error|fatal):' "$diff_err"; then
+        cat "$diff_err" >&2
         echo "collect-diff: ERROR: git diff failed (exit $rc) for: $f" >&2
-        exit "$rc"
+        exit $(( rc > 1 ? rc : 2 ))
       fi
+      cat "$diff_err" >&2
     done < "$untracked_list"
   fi
 }
@@ -122,7 +137,8 @@ emit() {
 # silently truncated review coverage is worse than a loud warning.
 tmp="$(mktemp -t collect-diff-XXXXXX)"
 untracked_list="$(mktemp -t collect-diff-untracked-XXXXXX)"
-trap 'rm -f "$tmp" "$untracked_list"' EXIT
+diff_err="$(mktemp -t collect-diff-err-XXXXXX)"
+trap 'rm -f "$tmp" "$untracked_list" "$diff_err"' EXIT
 emit > "$tmp"
 lines="$(wc -l < "$tmp")"
 if (( lines > 20000 )); then
