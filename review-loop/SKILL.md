@@ -184,6 +184,8 @@ Review for: correctness bugs, missing pieces, broken error handling, security
 holes, data-integrity problems, race conditions, edge cases, regressions, and
 anything that would fail the repo's own tests. Point to exact file:line.
 Prefer real defects over style nits.
+Report EVERY defect you find, not only the most important: each round costs
+the same whether it reports one finding or ten.
 The sandbox is read-only and the repo's tests/lint/typecheck already passed
 before this round: do not run builds or test suites (they fail on writes
 here); read the code.

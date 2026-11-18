@@ -262,7 +262,9 @@ correctness/security/data-integrity problem: wrong or missing files & APIs,
 invalid assumptions about how the current code works, missing steps, bad
 ordering or dependency mistakes, unhandled edge cases and failure modes,
 migration/backfill gaps, cross-repo contract mismatches. Verify claims against
-the actual code on disk. Prefer a few real blockers over a pile of nitpicks.
+the actual code on disk. Report EVERY real problem you find, not only the most
+important: each round costs the same whether it reports one finding or ten.
+Skip nitpicks.
 The sandbox is read-only and nothing is built yet: do not run builds or test
 suites; read the code.
 
@@ -299,6 +301,8 @@ Review for: correctness bugs, deviations from the plan, missing pieces, broken
 or missing error handling, security holes, data-integrity/migration problems,
 edge cases, regressions, and anything that would fail the repo's own tests.
 Point to exact file:line. Prefer real defects over style nits.
+Report EVERY defect you find, not only the most important: each round costs
+the same whether it reports one finding or ten.
 The sandbox is read-only and the repo's tests/lint/typecheck already passed
 before this round: do not run builds or test suites (they fail on writes
 here); read the code.
