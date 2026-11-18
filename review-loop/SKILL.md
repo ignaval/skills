@@ -29,7 +29,8 @@ on input. The user sees the final report.
   `subagent_type: "loop-worker"` (Opus 5.5 at `high` effort, from
   `~/.claude/agents/loop-worker.md`; if that type is missing, use
   `general-purpose` with `model: "opus"`); honor a user-supplied
-  `SUBAGENT_MODEL=...` as the `model` override.
+  `SUBAGENT_MODEL=...` as the `model` override (an `Agent` alias: `opus`,
+  `sonnet`, `haiku` or `fable`).
 - **The codex reviewer** uses the helper's default model (`CODEX_MODEL`;
   default `gpt-6.1-sol`), at **`medium` effort until clean, then `xhigh`**.
 
@@ -53,7 +54,8 @@ one valid finding means its analogous sites were never audited: sweep.
   One codex pass on the host under codex's read-only sandbox. Pass every repo
   (first = cwd, rest `--add-dir`ed); reference repos, diffs and the ledger by
   **absolute path** in the prompt. **stdout** is the full session stream —
-  `tee` it for humans, never parse it. **`$CODEX_ANSWER_FILE`** holds codex's
+  redirect it to a transcript file for humans; never read, parse or `tee` it
+  (that pulls megabytes into your context). **`$CODEX_ANSWER_FILE`** holds codex's
   final answer only, as JSON `{"findings":[{severity,location,problem,fix}...]}`
   — **an empty list is the convergence signal**; judge every round from this
   file alone and give each round its own path. Non-zero exit (auth, network,
@@ -61,6 +63,14 @@ one valid finding means its analogous sites were never audited: sweep.
   report.
 - **`~/.claude/skills/implementation-loop/collect-diff.sh <repo-path>`** — the
   working-tree diff (tracked vs HEAD + untracked), binary-safe, read-only.
+- **Running a round:** shell variables do not persist between Bash tool
+  calls, so write `$SCRATCH`, the answer and transcript paths and every repo
+  as **literal absolute paths** in each command. A round can take up to
+  `CODEX_TIMEOUT` (an `xhigh` round has taken 30–45 minutes), longer than a
+  foreground Bash call may run: start it with `run_in_background: true` and a
+  Bash `timeout` of at least `CODEX_TIMEOUT` + 120 s (3,720,000 ms by
+  default), then wait for the completion notification; its exit code is the
+  round's. One round at a time.
 
 ## Phase 0 — Scope: what THIS conversation changed
 
@@ -70,9 +80,12 @@ one valid finding means its analogous sites were never audited: sweep.
    unique **slug** (basename, suffixed on collision).
 3. Per repo, determine `BASE` = HEAD **before this conversation's first
    commit** (conversation knowledge is the authority; the `Co-Authored-By:
-   Claude` trailer corroborates). If nothing was committed, `BASE` = HEAD. A
-   repo with neither committed nor uncommitted session changes is dropped
-   from `REPOS`.
+   Claude` trailer corroborates). If nothing was committed, `BASE` = HEAD. If
+   the repo had no commits before the session's first one, `BASE` is git's
+   empty tree (`git hash-object -t tree /dev/null`); if HEAD is still unborn,
+   there is no committed span and the `git diff BASE..HEAD` part of Phase 1
+   is skipped. A repo with neither committed nor uncommitted session changes
+   is dropped from `REPOS`.
 4. **Out-of-scope guard:** dirty state that predates this conversation is out
    of scope — say so in every prompt and keep it out of the report. If
    pre-session and session edits overlap in the **same hunks**, review the
@@ -86,18 +99,19 @@ one valid finding means its analogous sites were never audited: sweep.
 ## Phase 1 — Per-finding ladder (medium tier, then xhigh tier)
 
 Each round (`medium` until converged, then restart at `xhigh`, trimmed by the
-profile):
+profile; `<tier>` is `medium` or `xhigh`, and `N` restarts at 1 in each tier):
 
-1. **Diffs:** per repo, `git diff BASE..HEAD` followed by `~/.claude/skills/implementation-loop/collect-diff.sh <repo>`,
+1. **Diffs:** per repo, `git diff --no-color BASE..HEAD` followed by `~/.claude/skills/implementation-loop/collect-diff.sh <repo>`,
    concatenated into `$SCRATCH/diff-<slug>.patch`. Always both — fixes change
    the diff, and fixes committed per round would otherwise vanish. This is the
    only place diffs are built; a fix always leads back here.
 2. **Prompt:** `$SCRATCH/review-prompt.md` from the template — stable across
    rounds, everything by path.
-3. **Run:**
-   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/round-<tier>-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/review-prompt.md" <medium|xhigh> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/round-<tier>-N.md"`
-4. **Judge** from the answer file only. `findings: []` (or all findings already
-   ledgered) → tier converged. Otherwise verify each finding against the code:
+3. **Run** (in the background, as in *Running a round*):
+   `CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/round-<tier>-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/review-prompt.md" <tier> <every repo path> > "$SCRATCH/round-<tier>-N.md" 2>&1`
+4. **Judge** from the answer file only. The round **converged** when
+   `findings` is empty or every finding is already in the ledger: medium →
+   start the xhigh tier; xhigh → the ladder ends. Otherwise verify each finding against the code:
    valid → fix (yourself or a reviewed subagent), re-run that repo's gates;
    invalid / intentional → ledger with a one-line reason.
 5. **Classify** each valid finding: **NEW-CLASS** / **KNOWN-SITE** /
@@ -108,10 +122,12 @@ profile):
    went, commit each round's fixes the same way (same style, trailer);
    otherwise leave fixes uncommitted.
 
-**Phase transition:** after **2 consecutive rounds with no NEW-CLASS finding**,
-stop the ladder even mid-tier (this **overrides** tier progression — a skipped
-xhigh tier is replaced by the sweep plus Phase 3 at the profile's effort). Backstop: force it at **25
-rounds in one tier**.
+**Phase transition:** count consecutive **non-converged** rounds with no
+NEW-CLASS finding; a converged round ends its tier through step 4 instead,
+and the count restarts at 0 when a tier starts. At **2**, stop the ladder
+even mid-tier (this **overrides** tier progression — a skipped xhigh tier is
+replaced by the sweep plus Phase 3 at the profile's effort). Backstop: force
+it at **25 rounds in one tier**.
 
 ## Phase 2 — Discipline sweep
 
@@ -125,10 +141,14 @@ declined ones as **accepted residuals**.
 
 ## Phase 3 — Capped verification
 
-Rounds per the profile, full ledger in the prompt. The first converged round
-(empty `findings`, or all findings already ledgered) ends the loop; genuinely
-new findings are judged/fixed as usual and the cap ticks down; if it
-expires with findings still arriving, stop and report them verbatim.
+Up to the profile's cap of rounds, at its verification effort. Each one is a
+Phase-1 round: rebuild the diffs (step 1 — the sweep changed code), reuse the
+prompt (it references the ledger, now with the accepted residuals, by path),
+and name the files `verify-N.answer.json` and `verify-N.md`. The first
+converged round ends the loop. Otherwise judge, fix and classify as in
+steps 4–7, and the cap ticks down. If the cap runs out with findings still
+arriving, fix the valid ones from the last round, re-run the gates, and
+report those findings verbatim as fixed but not re-verified.
 
 If the ladder keeps surfacing the same area, the underlying design may be
 wrong — fix upstream rather than patching symptoms.
@@ -163,6 +183,9 @@ Review for: correctness bugs, missing pieces, broken error handling, security
 holes, data-integrity problems, race conditions, edge cases, regressions, and
 anything that would fail the repo's own tests. Point to exact file:line.
 Prefer real defects over style nits.
+The sandbox is read-only and the repo's tests/lint/typecheck already passed
+before this round: do not run builds or test suites (they fail on writes
+here); read the code.
 
 PREVIOUSLY REVIEWED — intentionally NOT changed, and ACCEPTED RESIDUALS — do
 NOT re-raise anything in: <absolute $SCRATCH path>/ledger.md   (or: "none yet")

@@ -23,7 +23,9 @@
 #   <prompt-file>  Path to the review prompt (markdown), piped to codex on stdin.
 #   [effort]       codex reasoning effort: xhigh (default) | high | medium | low | max.
 #                  Optional even when repos follow: a non-effort second
-#                  argument is treated as the first repo.
+#                  argument is treated as the first repo. A repo whose path is
+#                  literally an effort word (`./high` written as `high`) is read
+#                  as the effort, so pass repos as absolute paths.
 #   [repo ...]     Repo paths the review covers. Each is validated to exist;
 #                  the FIRST becomes codex's working directory (-C) and the
 #                  rest are granted as extra directories (--add-dir). Still
@@ -48,8 +50,14 @@
 #   CODEX_ANSWER_FILE    where the final answer goes (see above)
 #   CODEX_OUTPUT_SCHEMA  JSON Schema for the final answer; "none" disables
 #                        the schema (final answer is then free text)
-#   CODEX_EXTRA_ARGS     extra flags appended to `codex exec`, whitespace-split
-#                        (e.g. "--ephemeral --ignore-user-config").
+#   CODEX_SERVICE_TIER   codex service tier: fast | flex | default (unset: the
+#                        user's config). Validated here, since -c is refused below.
+#   CODEX_EXTRA_ARGS     extra flags appended to `codex exec`, whitespace-split.
+#                        ALLOWLIST: --ephemeral, --ignore-user-config,
+#                        --strict-config, --json, --color=<always|never|auto>.
+#                        Anything else is refused: codex has many flags that
+#                        weaken the sandbox (--yolo, --trust, --enable, ...),
+#                        and a denylist cannot keep up with them.
 #
 # The sandbox mode is HARDCODED to read-only on purpose — an autonomous
 # reviewer must never write. If you need something else, you are not running
@@ -78,34 +86,60 @@ SCHEMA="${CODEX_OUTPUT_SCHEMA:-$HERE/findings.schema.json}"
 
 die() { echo "codex-review: $*" >&2; exit 2; }
 
-# Absolute paths — codex runs with its cwd set to the first repo.
+# Absolute paths — codex runs with its cwd set to the first repo. Prints
+# nothing and fails when the parent directory does not exist.
 abspath() {
   local d
-  d="$(cd -- "$(dirname -- "$1")" && pwd)" || die "cannot resolve path: $1"
+  d="$(cd -- "$(dirname -- "$1")" 2>/dev/null && pwd)" || return 1
   echo "$d/$(basename -- "$1")"
 }
 
 # THE ANSWER-FILE INVARIANT: a present, non-empty answer file means a review
 # happened. So the file is claimed and cleared FIRST — before any fallible
-# preflight — and a trap removes it on every exit path; the trap is disarmed
-# only after a successful run wrote a non-empty answer.
-[[ -f "$PROMPT_FILE" ]] || die "prompt file not found: $PROMPT_FILE"
-PROMPT_ABS="$(abspath "$PROMPT_FILE")"
+# preflight, including the prompt and schema checks — and a trap removes it on
+# every exit path; the trap is disarmed only after a successful run wrote a
+# non-empty answer. The only exits that leave the path alone are the ones that
+# cannot leave a stale answer behind (its directory cannot be created) or must
+# not touch it (it aliases an input).
 ANSWER_FILE="${CODEX_ANSWER_FILE:-${PROMPT_FILE}.answer.json}"
 mkdir -p "$(dirname -- "$ANSWER_FILE")" || die "cannot create answer directory for: $ANSWER_FILE"
-ANSWER_ABS="$(abspath "$ANSWER_FILE")"
+ANSWER_ABS="$(abspath "$ANSWER_FILE")" || die "cannot resolve answer path: $ANSWER_FILE"
+# Inputs are resolved best-effort here (empty when their directory is
+# missing) so the alias check runs before the answer file is truncated; their
+# existence is checked after the clear.
+PROMPT_ABS="$(abspath "$PROMPT_FILE")" || PROMPT_ABS=""
 SCHEMA_ABS=""
-if [[ "$SCHEMA" != none ]]; then SCHEMA_ABS="$(abspath "$SCHEMA")"; fi
+if [[ "$SCHEMA" != none ]]; then SCHEMA_ABS="$(abspath "$SCHEMA")" || SCHEMA_ABS=""; fi
 # Never let the answer file alias an input (-ef also catches symlink/hard-link
 # aliases; it is false for a missing file).
-if [[ "$ANSWER_ABS" == "$PROMPT_ABS" || "$ANSWER_ABS" -ef "$PROMPT_ABS" ]] \
+if [[ -n "$PROMPT_ABS" && ( "$ANSWER_ABS" == "$PROMPT_ABS" || "$ANSWER_ABS" -ef "$PROMPT_ABS" ) ]] \
    || [[ -n "$SCHEMA_ABS" && ( "$ANSWER_ABS" == "$SCHEMA_ABS" || "$ANSWER_ABS" -ef "$SCHEMA_ABS" ) ]]; then
   die "CODEX_ANSWER_FILE must not be the prompt or the schema: $ANSWER_ABS"
 fi
-: > "$ANSWER_ABS" || die "cannot write answer file: $ANSWER_ABS"
+# A symlinked answer path would be written through to its target, and the
+# trap would remove only the link: replace it with a regular file.
+if [[ -L "$ANSWER_ABS" ]]; then rm -f "$ANSWER_ABS" || die "cannot replace symlinked answer path: $ANSWER_ABS"; fi
 trap 'rm -f "$ANSWER_ABS"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+: > "$ANSWER_ABS" || die "cannot write answer file: $ANSWER_ABS"
+
+# codex runs as a background child so a signal is handled at once (bash
+# defers traps until a FOREGROUND child exits, and GNU timeout puts itself in
+# its own process group, so a terminal Ctrl-C never reaches it). The handler
+# stops timeout, which forwards the signal to codex and KILLs it after the
+# grace period, and waits for it: no orphan can write an answer after the
+# EXIT trap has removed the file.
+CHILD=""
+on_signal() {
+  if [[ -n "$CHILD" ]]; then
+    kill -TERM "$CHILD" 2>/dev/null || true
+    wait "$CHILD" 2>/dev/null || true
+  fi
+  exit "$1"
+}
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
+
+[[ -f "$PROMPT_FILE" ]] || die "prompt file not found: $PROMPT_FILE"
 
 command -v codex >/dev/null || die "codex CLI not found on PATH (npm install -g @openai/codex)"
 # GNU timeout: plain `timeout` on Linux, `gtimeout` from coreutils on macOS.
@@ -113,34 +147,28 @@ if command -v timeout >/dev/null; then TIMEOUT_BIN=timeout
 elif command -v gtimeout >/dev/null; then TIMEOUT_BIN=gtimeout
 else die "GNU timeout not found (on macOS: brew install coreutils for gtimeout)"
 fi
-case "$EFFORT" in high|medium|low|xhigh|max) ;; *) die "effort must be high|medium|low|xhigh|max (got: $EFFORT)";; esac
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "CODEX_TIMEOUT must be a positive integer number of seconds (got: $TIMEOUT)"
 if [[ "$SCHEMA" != none ]]; then
-  [[ -f "$SCHEMA" ]] || die "output schema not found: $SCHEMA (set CODEX_OUTPUT_SCHEMA=none for free text)"
+  [[ -n "$SCHEMA_ABS" && -f "$SCHEMA_ABS" ]] || die "output schema not found: $SCHEMA (set CODEX_OUTPUT_SCHEMA=none for free text)"
 fi
 
 for r in ${REPOS[@]+"${REPOS[@]}"}; do   # bash 3.2: empty-array guard under set -u
   [[ -d "$r" ]] || die "repo not a directory: $r"
 done
 
-# Whitespace-split on purpose: operator-supplied flags. Flags that would
-# change or disable the sandbox, or redirect the answer, are refused —
-# read-only is this script's contract, not a default.
+# Whitespace-split on purpose: operator-supplied flags. An ALLOWLIST, not a
+# denylist: read-only is this script's contract, and codex keeps adding flags
+# that weaken it (--yolo, --trust, --worktree, --enable <feature>, ...).
 # -d '' so newlines split too (IFS whitespace), not just the first line;
 # read returns non-zero at EOF in that mode, hence || true.
 EXTRA_ARGS=()
 read -r -d '' -a EXTRA_ARGS <<< "${CODEX_EXTRA_ARGS:-}" || true
 for a in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
   case "$a" in
-    --dangerously-*|-s*|--sandbox|--sandbox=*)
-      die "CODEX_EXTRA_ARGS may not change the sandbox (refused: $a)";;
-    -c*|--config|--config=*|-p*|--profile|--profile=*)
-      die "CODEX_EXTRA_ARGS may not override config or profiles (they can redefine the sandbox) (refused: $a)";;
-    -o*|--output-last-message|--output-last-message=*|--output-schema|--output-schema=*|-C*|--cd|--cd=*|--add-dir|--add-dir=*)
-      die "CODEX_EXTRA_ARGS may not set the answer file, schema, cwd or extra dirs — use the env knobs / repo args (refused: $a)";;
+    --ephemeral|--ignore-user-config|--strict-config|--json|--color=always|--color=never|--color=auto) ;;
+    *) die "CODEX_EXTRA_ARGS allows only --ephemeral, --ignore-user-config, --strict-config, --json and --color=<always|never|auto> (refused: $a)";;
   esac
 done
-
 
 CWD_ARGS=()
 ADD_DIR_ARGS=()
@@ -150,8 +178,15 @@ if [[ ${#REPOS[@]} -gt 0 ]]; then
 fi
 SCHEMA_ARGS=()
 if [[ -n "$SCHEMA_ABS" ]]; then SCHEMA_ARGS=( --output-schema "$SCHEMA_ABS" ); fi
+TIER_ARGS=()
+case "${CODEX_SERVICE_TIER:-}" in
+  "") ;;
+  fast|flex|default) TIER_ARGS=( -c "service_tier=\"$CODEX_SERVICE_TIER\"" ) ;;
+  *) die "CODEX_SERVICE_TIER must be fast|flex|default (got: $CODEX_SERVICE_TIER)" ;;
+esac
 
-# Not exec'd: the EXIT trap must still run after codex returns.
+# Not exec'd: the EXIT trap must still run after codex returns. Backgrounded
+# and waited on so INT/TERM interrupt the wait (see on_signal).
 rc=0
 "$TIMEOUT_BIN" --kill-after=30s "${TIMEOUT}s" \
   codex exec -m "$MODEL" -c model_reasoning_effort="$EFFORT" \
@@ -159,9 +194,13 @@ rc=0
   ${CWD_ARGS[@]+"${CWD_ARGS[@]}"} \
   ${ADD_DIR_ARGS[@]+"${ADD_DIR_ARGS[@]}"} \
   ${SCHEMA_ARGS[@]+"${SCHEMA_ARGS[@]}"} \
+  ${TIER_ARGS[@]+"${TIER_ARGS[@]}"} \
   -o "$ANSWER_ABS" \
   ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
-  - < "$PROMPT_ABS" || rc=$?
+  - < "$PROMPT_ABS" &
+CHILD=$!
+wait "$CHILD" || rc=$?
+CHILD=""
 if (( rc != 0 )); then
   echo "codex-review: codex exited $rc — no review happened; answer file removed" >&2
   exit "$rc"   # EXIT trap removes the answer file

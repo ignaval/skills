@@ -93,10 +93,11 @@ committed during the conversation):
 | Knob | Where | Effect |
 |---|---|---|
 | `low` / `medium` / `high` | first word of the arguments | Intensity profile, default `high` — see below |
-| `SUBAGENT_MODEL=<model>` | in the arguments | Model override for implementation / fix / audit subagents (default: the `loop-worker` agent, Opus 5.5 at high effort) |
+| `SUBAGENT_MODEL=<alias>` | in the arguments | Model override for implementation / fix / audit subagents: an `Agent` tool alias (`opus`, `sonnet`, `haiku`, `fable`), not a full model ID (default: the `loop-worker` agent, Opus 5.5 at high effort) |
 | `CODEX_MODEL=<id>` | shell env before starting Claude Code | Reviewer model (default `gpt-6.1-sol`) |
 | `CODEX_TIMEOUT=<seconds>` | shell env | Per-round cap (default 3600) |
-| `CODEX_EXTRA_ARGS="..."` | shell env | Extra `codex exec` flags, e.g. `--ephemeral` |
+| `CODEX_SERVICE_TIER=<tier>` | shell env | Codex service tier: `fast`, `flex` or `default` (unset: your codex config) |
+| `CODEX_EXTRA_ARGS="..."` | shell env | Extra `codex exec` flags, allowlisted: `--ephemeral`, `--ignore-user-config`, `--strict-config`, `--json`, `--color=<always\|never\|auto>` |
 
 **What happens.** Both skills run fully autonomously — no approval gates, no
 questions — and narrate progress through the task list. Each codex round
@@ -166,12 +167,15 @@ fi
   file is removed — never read an answer without a zero exit. `CODEX_OUTPUT_SCHEMA`
   swaps the schema or, as `none`, gives free text — for direct use only; the
   skills pin the bundled schema. The sandbox mode is hardcoded to read-only,
-  and `CODEX_EXTRA_ARGS` refuses anything that could change it (including
-  `-c`/`--config` and `-p`/`--profile` overrides), the answer file, the
-  schema, or the directories in scope.
+  and `CODEX_EXTRA_ARGS` is an allowlist (the flags in the knobs table); every
+  other flag is refused, since codex has many that weaken the sandbox or
+  change the answer file, schema or directories in scope. INT and TERM stop
+  codex before the script exits, so an interrupted round leaves no answer
+  file and nothing running.
 - **`collect-diff.sh <repo-path>`** — comprehensive, binary-safe, read-only
-  review diff for one repo, with a loud warning when it is too large for one
-  round.
+  review diff for one repo (tracked changes vs HEAD, or vs the empty tree
+  before the first commit, plus new untracked files, never colored), with a
+  loud warning when it is too large for one round.
 
 ## Security note
 

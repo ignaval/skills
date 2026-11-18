@@ -4,7 +4,9 @@
 # Emits, with a header identifying the repo/branch/HEAD:
 #   1. `git status --short`         (orientation)
 #   2. `git diff HEAD`              (all tracked changes vs last commit,
-#                                    staged AND unstaged — no index mutation)
+#                                    staged AND unstaged — no index mutation;
+#                                    vs the empty tree when there are no
+#                                    commits yet, so staged files still show)
 #   3. full contents of each new untracked file, rendered as a unified diff via
 #      `git diff --no-index` so BINARY files show "Binary files differ" instead
 #      of dumping bytes into the review.
@@ -48,8 +50,16 @@ if git rev-parse --verify -q HEAD >/dev/null; then
   head="$(git rev-parse --short HEAD)"
   has_head=1
 else
-  head='(no commits yet)'   # unborn HEAD: everything shows up as untracked below
+  head='(no commits yet)'
   has_head=0
+fi
+# Diff base: HEAD, or the empty tree on an unborn HEAD (files already
+# `git add`ed are tracked, not untracked, and would otherwise vanish).
+# hash-object works for SHA-1 and SHA-256 repos alike.
+if [[ "$has_head" == 1 ]]; then
+  base=HEAD
+else
+  base="$(git hash-object -t tree /dev/null)"
 fi
 
 emit() {
@@ -60,16 +70,15 @@ emit() {
   echo "############################################################"
   echo
   echo "===== git status --short ====="
-  git status --short
+  git -c color.ui=false -c color.status=false status --short
   echo
   echo "===== tracked changes vs HEAD (git diff HEAD) ====="
-  if [[ "$has_head" == 1 ]]; then
-    # No || true: a failing diff must abort loudly — an incomplete patch that
-    # gets reviewed as comprehensive is worse than a hard error.
-    git diff --no-ext-diff --no-textconv HEAD
-  else
-    echo "(repo has no commits yet — all files appear as untracked below)"
+  if [[ "$has_head" == 0 ]]; then
+    echo "(repo has no commits yet — staged files are diffed against the empty tree)"
   fi
+  # No || true: a failing diff must abort loudly — an incomplete patch that
+  # gets reviewed as comprehensive is worse than a hard error.
+  git diff --no-color --no-ext-diff --no-textconv "$base"
   echo
   echo "===== new untracked files (full contents as unified diff) ====="
   local f rc
@@ -100,7 +109,7 @@ emit() {
       # --no-index against /dev/null renders the whole file as additions and is
       # binary-safe. It exits 1 when files differ (always true here); anything
       # >1 is a real error and must not be silently swallowed.
-      rc=0; git diff --no-ext-diff --no-textconv --no-index -- /dev/null "$f" || rc=$?
+      rc=0; git diff --no-color --no-ext-diff --no-textconv --no-index -- /dev/null "$f" || rc=$?
       if (( rc > 1 )); then
         echo "collect-diff: ERROR: git diff failed (exit $rc) for: $f" >&2
         exit "$rc"

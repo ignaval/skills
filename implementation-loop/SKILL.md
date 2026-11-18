@@ -37,12 +37,13 @@ follow along; they see the **final report** only.
   `~/.claude/agents/loop-worker.md`; if that type is missing, use
   `general-purpose` with `model: "opus"`). Pass `model: "haiku"` only for
   trivial mechanical edits. Honor a user-supplied `SUBAGENT_MODEL=...`
-  argument as the `model` override.
+  argument as the `model` override (an `Agent` alias: `opus`, `sonnet`,
+  `haiku` or `fable`).
 - **The codex reviewer** uses the helper's default model (`CODEX_MODEL` to
   override; default `gpt-6.1-sol`), at **`medium` effort until clean, then
   `xhigh`** — the medium tier clears the cheap findings before the expensive
-  rounds. An `xhigh` round costs more than the 200–450k codex tokens a
-  `high` round used to.
+  rounds. An `xhigh` verification round has run about 200–230k codex tokens
+  and 30–45 minutes.
 
 ## Intensity profiles (optional argument — default `high`)
 
@@ -69,12 +70,13 @@ read-only`): it reads repos straight from disk and cannot write. Always go
 through the two colocated helpers (prerequisites in the repo README):
 
 - **`~/.claude/skills/implementation-loop/codex-review.sh <prompt-file> [effort] [repo ...]`**
-  One codex pass. `effort` = `xhigh | high | medium | low`. **Pass every repo in
+  One codex pass. `effort` = `xhigh | high | medium | low | max`. **Pass every repo in
   play** (the first becomes codex's cwd, the rest are `--add-dir`ed) and
   reference repos, diffs and the plan by **absolute path** in the prompt.
   Two outputs:
   - **stdout** — the full session stream (shell calls, an echo of your prompt,
-    token counts). `tee` it to disk for humans. **Never parse it.**
+    token counts). Redirect it to a transcript file for humans. **Never read
+    or parse it**; never `tee` it, which pulls megabytes into your context.
   - **`$CODEX_ANSWER_FILE`** — codex's **final answer only**, as JSON matching
     `findings.schema.json`: `{"findings":[{severity,location,problem,fix}...]}`.
     **An empty `findings` array is the convergence signal.** Read only this
@@ -86,6 +88,15 @@ through the two colocated helpers (prerequisites in the repo README):
   Comprehensive, binary-safe, read-only review diff for one repo (tracked
   changes vs HEAD + new untracked files). Warns on stderr when too large for
   one round.
+
+**Running a round.** Shell variables do not persist between Bash tool calls:
+write `$SCRATCH`, the answer and transcript paths and every repo as **literal
+absolute paths** in each command. A round takes up to `CODEX_TIMEOUT` (an
+`xhigh` round has taken 30–45 minutes), longer than a foreground Bash call may
+run, so start it with `run_in_background: true` and a Bash `timeout` of at
+least `CODEX_TIMEOUT` + 120 s (3,720,000 ms by default), then wait for the
+completion notification; its exit code is the round's. Run one round at a
+time.
 
 ## Phase 0 — Setup
 
@@ -153,25 +164,27 @@ when it stops teaching, a sweep that closes classes wholesale, and capped
 verification that proves closure.
 
 **Tier order:** `medium` until converged, then restart at `xhigh` (trimmed by
-the profile table). Each round, either tier:
+the profile table). Each round, either tier (`<tier>` is `medium` or `xhigh`;
+`N` restarts at 1 in each tier):
 
 1. **Diffs:** for every repo, `~/.claude/skills/implementation-loop/collect-diff.sh <repo> > "$SCRATCH/diff-<slug>.patch"`.
    If the user asked for commits along the way, prepend the committed span
    since the Phase-0 HEAD (`git diff <phase-0 HEAD>..HEAD`; git's empty-tree
-   hash for a repo that had no commits) — `collect-diff.sh` alone would drop
-   it. This is the only place diffs are built; a fix always leads back here.
+   hash, `git hash-object -t tree /dev/null`, for a repo that had no commits;
+   add `--no-color`) — `collect-diff.sh` alone would drop it. This is the only
+   place diffs are built; a fix always leads back here.
 2. **Prompt:** write `$SCRATCH/impl-review-prompt.md` from the template. Keep
    it stable across rounds: reference `plan.md`, the diffs and `ledger.md` by
    path, never inline them.
-3. **Run:**
-   `set -o pipefail; CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/impl-review-round-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/impl-review-prompt.md" <medium|xhigh> "${REPOS[@]}" 2>&1 | tee "$SCRATCH/impl-review-round-N.md"`
-   (`pipefail` so `tee` cannot mask a codex failure).
-4. **Judge** from the answer file only. `findings: []` → tier converged (medium
-   → start xhigh; xhigh → ladder ends; sweep unless the footnote applies).
-   Otherwise, per finding, **verify against the code**: valid → fix (yourself
-   or a reviewed subagent), re-run that repo's gates; invalid / intentional →
-   append to `ledger.md` with a one-line reason, leave the code alone. A round
-   whose findings are all already ledgered counts as converged.
+3. **Run** (in the background, as in *Running a round*):
+   `CODEX_OUTPUT_SCHEMA=~/.claude/skills/implementation-loop/findings.schema.json CODEX_ANSWER_FILE="$SCRATCH/impl-review-<tier>-N.answer.json" ~/.claude/skills/implementation-loop/codex-review.sh "$SCRATCH/impl-review-prompt.md" <tier> <every repo path> > "$SCRATCH/impl-review-<tier>-N.md" 2>&1`
+4. **Judge** from the answer file only. The round **converged** when
+   `findings` is empty or every finding is already in the ledger: medium →
+   start the xhigh tier; xhigh → the ladder ends (sweep unless the footnote
+   applies). Otherwise, per finding, **verify against the code**: valid → fix
+   (yourself or a reviewed subagent), re-run that repo's gates; invalid /
+   intentional → append to `ledger.md` with a one-line reason, leave the code
+   alone.
 5. **Classify** each valid finding in the round log: **NEW-CLASS** (a rule
    could be written from it) / **KNOWN-SITE** (an established rule missing at
    one more site) / **FOLLOW-ON** (a defect in one of this run's own fixes).
@@ -179,11 +192,13 @@ the profile table). Each round, either tier:
    in the same pass; pin regression tests at the **exact seam** (counted-wrapper
    injection where ordering matters).
 
-**Phase transition.** After **2 consecutive rounds with no NEW-CLASS finding**
-(severity is a noisy signal — highs keep appearing in the tail), stop the
-ladder even mid-tier — this **overrides** tier progression; a skipped xhigh
-tier is replaced by the sweep plus xhigh-effort verification. Backstop: force
-it at **25 rounds in one tier**.
+**Phase transition.** Count consecutive **non-converged** rounds with no
+NEW-CLASS finding (severity is a noisy signal — highs keep appearing in the
+tail). A converged round ends its tier through step 4 instead, and the count
+restarts at 0 when a tier starts. At **2**, stop the ladder even mid-tier —
+this **overrides** tier progression; a skipped xhigh tier is replaced by the
+sweep plus xhigh-effort verification. Backstop: force it at **25 rounds in
+one tier**.
 
 **Sweep.** Distill this run's findings into **named rules** (identity-gating,
 error taxonomy, arithmetic dedup, ordering, compare-and-write, … whatever the
@@ -194,11 +209,14 @@ failure scenario, CONFIRMED/PLAUSIBLE confidence, and an explicit
 corroboration: verify every citation yourself, fix the survivors in one pass
 (gates green), ledger the declined ones as **accepted residuals**.
 
-**Capped verification.** Rounds per the profile with the full ledger in the
-prompt. The first converged round (empty `findings`, or all findings already
-ledgered) ends Phase 4; genuinely new findings are judged/fixed as usual and
-the cap ticks down; if the cap expires with findings still arriving,
-stop and report them verbatim.
+**Capped verification.** Up to the profile's cap of rounds, at its
+verification effort. Each one is a ladder round: rebuild the diffs (step 1 —
+the sweep changed code), reuse the prompt (it references the ledger, now with
+the accepted residuals, by path), and name the files `verify-N.answer.json`
+and `verify-N.md`. The first converged round ends Phase 4. Otherwise judge,
+fix and classify as in steps 4–6, and the cap ticks down. If the cap runs out
+with findings still arriving, fix the valid ones from the last round, re-run
+the gates, and report those findings verbatim as fixed but not re-verified.
 
 If the ladder keeps surfacing the same area, the **plan** may be wrong — fix
 upstream rather than patching symptoms.
@@ -244,6 +262,8 @@ invalid assumptions about how the current code works, missing steps, bad
 ordering or dependency mistakes, unhandled edge cases and failure modes,
 migration/backfill gaps, cross-repo contract mismatches. Verify claims against
 the actual code on disk. Prefer a few real blockers over a pile of nitpicks.
+The sandbox is read-only and nothing is built yet: do not run builds or test
+suites; read the code.
 
 PREVIOUSLY REVIEWED — intentionally NOT changed, do NOT re-raise anything in:
 <absolute $SCRATCH path>/ledger.md   (or: "none yet")
@@ -278,6 +298,9 @@ Review for: correctness bugs, deviations from the plan, missing pieces, broken
 or missing error handling, security holes, data-integrity/migration problems,
 edge cases, regressions, and anything that would fail the repo's own tests.
 Point to exact file:line. Prefer real defects over style nits.
+The sandbox is read-only and the repo's tests/lint/typecheck already passed
+before this round: do not run builds or test suites (they fail on writes
+here); read the code.
 
 PREVIOUSLY REVIEWED — intentionally NOT changed, and ACCEPTED RESIDUALS — do
 NOT re-raise anything in: <absolute $SCRATCH path>/ledger.md   (or: "none yet")
